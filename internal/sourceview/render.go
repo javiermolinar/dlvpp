@@ -3,6 +3,8 @@ package sourceview
 import (
 	"bytes"
 	"fmt"
+	"go/ast"
+	"go/parser"
 	"go/scanner"
 	"go/token"
 	"os"
@@ -20,9 +22,50 @@ const (
 )
 
 func RenderWindow(path string, line int, contextLines int) (string, error) {
+	renderedLines, err := renderedLines(path)
+	if err != nil {
+		return "", err
+	}
+
+	start := max(1, line-contextLines)
+	end := min(len(renderedLines), line+contextLines)
+	return formatRange(renderedLines, line, start, end)
+}
+
+func RenderRange(path string, line int, start int, end int) (string, error) {
+	renderedLines, err := renderedLines(path)
+	if err != nil {
+		return "", err
+	}
+
+	if start <= 0 || end <= 0 {
+		return "", errorsf("source range out of range: %d-%d", start, end)
+	}
+	if start > end {
+		return "", errorsf("source range invalid: %d-%d", start, end)
+	}
+
+	start = max(1, start)
+	end = min(len(renderedLines), end)
+	return formatRange(renderedLines, line, start, end)
+}
+
+func RenderFunction(path string, line int) (string, error) {
+	if !strings.HasSuffix(path, ".go") {
+		return RenderWindow(path, line, 5)
+	}
+
+	start, end, err := enclosingFunctionRange(path, line)
+	if err != nil {
+		return "", err
+	}
+	return RenderRange(path, line, start, end)
+}
+
+func renderedLines(path string) ([]string, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return "", fmt.Errorf("read source: %w", err)
+		return nil, fmt.Errorf("read source: %w", err)
 	}
 
 	rendered := string(data)
@@ -31,18 +74,28 @@ func RenderWindow(path string, line int, contextLines int) (string, error) {
 	}
 
 	lines := strings.Split(rendered, "\n")
-	if line <= 0 || line > len(lines) {
-		return "", fmt.Errorf("source line out of range: %d", line)
-	}
+	return lines, nil
+}
 
-	start := max(1, line-contextLines)
-	end := min(len(lines), line+contextLines)
+func formatRange(lines []string, currentLine int, start int, end int) (string, error) {
+	if currentLine <= 0 || currentLine > len(lines) {
+		return "", errorsf("source line out of range: %d", currentLine)
+	}
+	if start <= 0 || start > len(lines) {
+		return "", errorsf("source start line out of range: %d", start)
+	}
+	if end <= 0 || end > len(lines) {
+		return "", errorsf("source end line out of range: %d", end)
+	}
+	if start > end {
+		return "", errorsf("source range invalid: %d-%d", start, end)
+	}
 
 	var out strings.Builder
 	out.WriteString("\n")
 	for i := start; i <= end; i++ {
 		text := lines[i-1]
-		if i == line {
+		if i == currentLine {
 			fmt.Fprintf(&out, "%s%s>%4d%s  %s\n", ansiYellow, ansiDim, i, ansiReset, text)
 			continue
 		}
@@ -50,6 +103,60 @@ func RenderWindow(path string, line int, contextLines int) (string, error) {
 	}
 	out.WriteString("\n")
 	return out.String(), nil
+}
+
+func enclosingFunctionRange(path string, line int) (int, int, error) {
+	if line <= 0 {
+		return 0, 0, errorsf("source line out of range: %d", line)
+	}
+
+	fset := token.NewFileSet()
+	file, err := parser.ParseFile(fset, path, nil, 0)
+	if err != nil {
+		return 0, 0, fmt.Errorf("parse go source: %w", err)
+	}
+
+	bestStart := 0
+	bestEnd := 0
+	bestSize := 0
+
+	ast.Inspect(file, func(node ast.Node) bool {
+		if node == nil {
+			return true
+		}
+
+		var startPos token.Pos
+		var endPos token.Pos
+		switch n := node.(type) {
+		case *ast.FuncDecl:
+			startPos = n.Pos()
+			endPos = n.End()
+		case *ast.FuncLit:
+			startPos = n.Type.Func
+			endPos = n.End()
+		default:
+			return true
+		}
+
+		start := fset.Position(startPos).Line
+		end := fset.Position(endPos).Line
+		if start == 0 || end == 0 || line < start || line > end {
+			return true
+		}
+
+		size := end - start
+		if bestStart == 0 || size < bestSize {
+			bestStart = start
+			bestEnd = end
+			bestSize = size
+		}
+		return true
+	})
+
+	if bestStart == 0 {
+		return 0, 0, errorsf("no enclosing function for line %d", line)
+	}
+	return bestStart, bestEnd, nil
 }
 
 func highlightGoSource(src []byte) string {
@@ -105,4 +212,8 @@ func colorForToken(tok token.Token) string {
 	default:
 		return ""
 	}
+}
+
+func errorsf(format string, args ...any) error {
+	return fmt.Errorf(format, args...)
 }
