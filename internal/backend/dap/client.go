@@ -204,7 +204,7 @@ func (c *Client) Next(ctx context.Context) (*backend.StopState, error) {
 }
 
 func (c *Client) StepIn(ctx context.Context) (*backend.StopState, error) {
-	return nil, backend.ErrUnsupported
+	return c.runThreadAction(ctx, "stepIn")
 }
 
 func (c *Client) StepOut(ctx context.Context) (*backend.StopState, error) {

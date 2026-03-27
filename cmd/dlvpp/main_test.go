@@ -81,6 +81,21 @@ func TestRunCommandLoopRunsNext(t *testing.T) {
 	}
 }
 
+func TestRunCommandLoopRunsStepIn(t *testing.T) {
+	t.Parallel()
+
+	runner := &fakeCommandRunner{
+		snapshots: []*session.Snapshot{{State: backend.StopState{}}},
+	}
+	var output bytes.Buffer
+	if err := runCommandLoop(context.Background(), bytes.NewBufferString("s\nq\n"), &output, runner, runner.currentSnapshot(), false); err != nil {
+		t.Fatalf("runCommandLoop returned error: %v", err)
+	}
+	if len(runner.actions) == 0 || runner.actions[0] != session.ActionStepIn {
+		t.Fatalf("expected step-in action, got %v", runner.actions)
+	}
+}
+
 func TestRunCommandLoopRejectsLongFormCommands(t *testing.T) {
 	t.Parallel()
 

@@ -23,7 +23,7 @@ const (
 	ttyEscape            = 27
 	ttyBackspace         = 8
 	ttyDelete            = 127
-	commandLoopHelp      = "Commands: n=next, :b <location>, q=quit"
+	commandLoopHelp      = "Commands: n=next, s=step in, :b <location>, q=quit"
 )
 
 var errQuitCommandLoop = errors.New("quit command loop")
@@ -96,6 +96,13 @@ func runTTYCommandLoop(ctx context.Context, input *os.File, output io.Writer, ru
 		case 'n':
 			if !commandMode {
 				if done, err := processCommand(ctx, output, runner, state, "n"); done || err != nil {
+					return err
+				}
+				continue
+			}
+		case 's':
+			if !commandMode {
+				if done, err := processCommand(ctx, output, runner, state, "s"); done || err != nil {
 					return err
 				}
 				continue
@@ -181,19 +188,9 @@ func executeCommandText(ctx context.Context, text string, output io.Writer, runn
 	case "q":
 		return errQuitCommandLoop
 	case "n":
-		actionCtx, cancel := context.WithTimeout(ctx, commandActionTimeout)
-		defer cancel()
-
-		snapshot, err := runner.Do(actionCtx, session.ActionNext)
-		if err != nil {
-			return fmt.Errorf("next: %w", err)
-		}
-		state.currentSnapshot = snapshot
-		_, _ = fmt.Fprint(output, formatSnapshotForView(snapshot, state, true))
-		if snapshot != nil && snapshot.State.Exited {
-			return errQuitCommandLoop
-		}
-		return nil
+		return runDebuggerAction(ctx, output, runner, state, session.ActionNext, "next")
+	case "s":
+		return runDebuggerAction(ctx, output, runner, state, session.ActionStepIn, "step in")
 	case "b":
 		if len(args) == 0 {
 			return errors.New("break requires a location")
@@ -210,6 +207,22 @@ func executeCommandText(ctx context.Context, text string, output io.Writer, runn
 	default:
 		return fmt.Errorf("unknown command: %s", command)
 	}
+}
+
+func runDebuggerAction(ctx context.Context, output io.Writer, runner commandRunner, state *viewState, action session.Action, label string) error {
+	actionCtx, cancel := context.WithTimeout(ctx, commandActionTimeout)
+	defer cancel()
+
+	snapshot, err := runner.Do(actionCtx, action)
+	if err != nil {
+		return fmt.Errorf("%s: %w", label, err)
+	}
+	state.currentSnapshot = snapshot
+	_, _ = fmt.Fprint(output, formatSnapshotForView(snapshot, state, true))
+	if snapshot != nil && snapshot.State.Exited {
+		return errQuitCommandLoop
+	}
+	return nil
 }
 
 func formatBreakpoint(bp *backend.Breakpoint) string {
