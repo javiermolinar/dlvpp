@@ -81,6 +81,10 @@ func (c *Controller) CreateBreakpoint(ctx context.Context, spec backend.Breakpoi
 	return c.backend.CreateBreakpoint(ctx, spec)
 }
 
+func (c *Controller) Locals(ctx context.Context, frame backend.FrameRef) ([]backend.Variable, error) {
+	return c.backend.Locals(ctx, frame)
+}
+
 func (c *Controller) StartLaunchSession(ctx context.Context, req backend.LaunchRequest, spec backend.BreakpointSpec) (*StartResult, error) {
 	if _, err := c.Launch(ctx, req); err != nil {
 		return nil, err

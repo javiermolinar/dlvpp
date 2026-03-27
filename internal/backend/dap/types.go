@@ -62,6 +62,27 @@ type stackSource struct {
 	Path string `json:"path"`
 }
 
+type scopesBody struct {
+	Scopes []scope `json:"scopes"`
+}
+
+type scope struct {
+	Name               string `json:"name"`
+	VariablesReference int    `json:"variablesReference"`
+	Expensive          bool   `json:"expensive"`
+}
+
+type variablesBody struct {
+	Variables []dapVariable `json:"variables"`
+}
+
+type dapVariable struct {
+	Name               string `json:"name"`
+	Value              string `json:"value"`
+	Type               string `json:"type"`
+	VariablesReference int    `json:"variablesReference"`
+}
+
 func mapStopReason(reason string) backend.StopReason {
 	switch reason {
 	case "entry":

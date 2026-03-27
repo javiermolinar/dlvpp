@@ -279,11 +279,77 @@ func (c *Client) Stack(ctx context.Context, goroutineID int, depth int) ([]backe
 }
 
 func (c *Client) Locals(ctx context.Context, frame backend.FrameRef) ([]backend.Variable, error) {
-	return nil, backend.ErrUnsupported
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if c.conn == nil {
+		return nil, errors.New("dap client is not connected")
+	}
+	if frame.Index <= 0 {
+		return nil, errors.New("frame id is required")
+	}
+
+	resp, err := c.requestLocked(ctx, "scopes", map[string]any{"frameId": frame.Index})
+	if err != nil {
+		return nil, err
+	}
+
+	var scopes scopesBody
+	if err := json.Unmarshal(resp.Body, &scopes); err != nil {
+		return nil, fmt.Errorf("decode scopes response: %w", err)
+	}
+
+	selected := selectLocalScopes(scopes.Scopes)
+	if len(selected) == 0 {
+		return nil, nil
+	}
+
+	var locals []backend.Variable
+	for _, scope := range selected {
+		resp, err := c.requestLocked(ctx, "variables", map[string]any{"variablesReference": scope.VariablesReference})
+		if err != nil {
+			return nil, err
+		}
+
+		var body variablesBody
+		if err := json.Unmarshal(resp.Body, &body); err != nil {
+			return nil, fmt.Errorf("decode variables response: %w", err)
+		}
+
+		for _, variable := range body.Variables {
+			locals = append(locals, backend.Variable{
+				Name:        variable.Name,
+				Type:        variable.Type,
+				Value:       variable.Value,
+				HasChildren: variable.VariablesReference > 0,
+			})
+		}
+	}
+
+	return locals, nil
 }
 
 func (c *Client) Goroutines(ctx context.Context) ([]backend.Goroutine, error) {
 	return nil, backend.ErrUnsupported
+}
+
+func selectLocalScopes(scopes []scope) []scope {
+	var selected []scope
+	for _, scope := range scopes {
+		switch strings.ToLower(scope.Name) {
+		case "arguments", "locals":
+			selected = append(selected, scope)
+		}
+	}
+	if len(selected) > 0 {
+		return selected
+	}
+	for _, scope := range scopes {
+		if !scope.Expensive {
+			selected = append(selected, scope)
+		}
+	}
+	return selected
 }
 
 func (c *Client) Eval(ctx context.Context, frame backend.FrameRef, expr string) (backend.Value, error) {

@@ -23,7 +23,7 @@ const (
 	ttyEscape            = 27
 	ttyBackspace         = 8
 	ttyDelete            = 127
-	commandLoopHelp      = "Commands: n=next, s=step in, :b <location>, q=quit"
+	commandLoopHelp      = "Commands: n=next, s=step in, l=locals, :b <location>, q=quit"
 )
 
 var errQuitCommandLoop = errors.New("quit command loop")
@@ -31,6 +31,7 @@ var errQuitCommandLoop = errors.New("quit command loop")
 type commandRunner interface {
 	Do(ctx context.Context, action session.Action) (*session.Snapshot, error)
 	CreateBreakpoint(ctx context.Context, spec backend.BreakpointSpec) (*backend.Breakpoint, error)
+	Locals(ctx context.Context, frame backend.FrameRef) ([]backend.Variable, error)
 }
 
 func runCommandLoop(ctx context.Context, input io.Reader, output io.Writer, runner commandRunner, initialSnapshot *session.Snapshot, sticky bool) error {
@@ -61,8 +62,6 @@ func runLineCommandLoop(ctx context.Context, input io.Reader, output io.Writer, 
 }
 
 func runTTYCommandLoop(ctx context.Context, input *os.File, output io.Writer, runner commandRunner, state *viewState) error {
-	_, _ = fmt.Fprintln(output, commandLoopHelp)
-
 	oldState, err := term.MakeRaw(int(input.Fd()))
 	if err != nil {
 		return fmt.Errorf("enable raw mode: %w", err)
@@ -107,6 +106,13 @@ func runTTYCommandLoop(ctx context.Context, input *os.File, output io.Writer, ru
 				}
 				continue
 			}
+		case 'l':
+			if !commandMode {
+				if done, err := processCommand(ctx, output, runner, state, "l"); done || err != nil {
+					return err
+				}
+				continue
+			}
 		case ':':
 			if !commandMode {
 				commandMode = true
@@ -126,12 +132,16 @@ func runTTYCommandLoop(ctx context.Context, input *os.File, output io.Writer, ru
 			commandBuf = commandBuf[:0]
 			continue
 		case ttyEscape:
-			if !commandMode {
+			if commandMode {
+				commandMode = false
+				commandBuf = commandBuf[:0]
+				_, _ = fmt.Fprintln(output)
 				continue
 			}
-			commandMode = false
-			commandBuf = commandBuf[:0]
-			_, _ = fmt.Fprintln(output)
+			if hasInspection(state) {
+				clearInspection(state)
+				_, _ = fmt.Fprint(output, formatSnapshotForView(state.currentSnapshot, state, true))
+			}
 			continue
 		case ttyDelete, ttyBackspace:
 			if !commandMode || len(commandBuf) == 0 {
@@ -191,6 +201,8 @@ func executeCommandText(ctx context.Context, text string, output io.Writer, runn
 		return runDebuggerAction(ctx, output, runner, state, session.ActionNext, "next")
 	case "s":
 		return runDebuggerAction(ctx, output, runner, state, session.ActionStepIn, "step in")
+	case "l":
+		return showLocals(ctx, output, runner, state)
 	case "b":
 		if len(args) == 0 {
 			return errors.New("break requires a location")
@@ -217,12 +229,63 @@ func runDebuggerAction(ctx context.Context, output io.Writer, runner commandRunn
 	if err != nil {
 		return fmt.Errorf("%s: %w", label, err)
 	}
+	clearInspection(state)
 	state.currentSnapshot = snapshot
 	_, _ = fmt.Fprint(output, formatSnapshotForView(snapshot, state, true))
 	if snapshot != nil && snapshot.State.Exited {
 		return errQuitCommandLoop
 	}
 	return nil
+}
+
+func showLocals(ctx context.Context, output io.Writer, runner commandRunner, state *viewState) error {
+	if state == nil || state.currentSnapshot == nil || state.currentSnapshot.Frame == nil {
+		return errors.New("locals: no current frame")
+	}
+
+	actionCtx, cancel := context.WithTimeout(ctx, commandActionTimeout)
+	defer cancel()
+
+	locals, err := runner.Locals(actionCtx, state.currentSnapshot.Frame.Ref)
+	if err != nil {
+		return fmt.Errorf("locals: %w", err)
+	}
+	body := formatLocals(locals)
+	setInspection(state, "locals", body)
+	_, _ = fmt.Fprint(output, formatInspectionForView(state.currentSnapshot, state, "locals", body, true))
+	return nil
+}
+
+func formatLocals(locals []backend.Variable) string {
+	if len(locals) == 0 {
+		return "(no locals)\n"
+	}
+
+	var out strings.Builder
+	for _, local := range locals {
+		value := local.Value
+		if value == "" {
+			value = "<no value>"
+		}
+		value = truncateText(value, 96)
+		switch {
+		case local.Type != "":
+			fmt.Fprintf(&out, "%s (%s) = %s\n", local.Name, local.Type, value)
+		default:
+			fmt.Fprintf(&out, "%s = %s\n", local.Name, value)
+		}
+	}
+	return out.String()
+}
+
+func truncateText(s string, limit int) string {
+	if limit <= 0 || len(s) <= limit {
+		return s
+	}
+	if limit <= 1 {
+		return s[:limit]
+	}
+	return s[:limit-1] + "…"
 }
 
 func formatBreakpoint(bp *backend.Breakpoint) string {

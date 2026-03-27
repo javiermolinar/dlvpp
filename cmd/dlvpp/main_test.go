@@ -96,6 +96,25 @@ func TestRunCommandLoopRunsStepIn(t *testing.T) {
 	}
 }
 
+func TestRunCommandLoopShowsLocals(t *testing.T) {
+	t.Parallel()
+
+	runner := &fakeCommandRunner{
+		locals: []backend.Variable{{Name: "total", Type: "int", Value: "42"}},
+		snapshots: []*session.Snapshot{{
+			State: backend.StopState{},
+			Frame: &backend.Frame{Ref: backend.FrameRef{GoroutineID: 1, Index: 2}, Location: backend.SourceLocation{File: "main.go", Line: 12, Function: "main.main"}},
+		}},
+	}
+	var output bytes.Buffer
+	if err := runCommandLoop(context.Background(), bytes.NewBufferString("l\nq\n"), &output, runner, runner.currentSnapshot(), false); err != nil {
+		t.Fatalf("runCommandLoop returned error: %v", err)
+	}
+	if !strings.Contains(output.String(), "locals:\n") || !strings.Contains(output.String(), "total (int) = 42") {
+		t.Fatalf("expected locals output, got %q", output.String())
+	}
+}
+
 func TestRunCommandLoopRejectsLongFormCommands(t *testing.T) {
 	t.Parallel()
 
@@ -179,6 +198,58 @@ func TestRunCommandLoopStickyPersistsAcrossStepSnapshots(t *testing.T) {
 	}
 	if strings.Contains(output.String(), clearScreenANSI) {
 		t.Fatalf("expected no clear-screen escape in line mode, got %q", output.String())
+	}
+}
+
+func TestFormatSnapshotForViewShowsPromptAndHintsInTTY(t *testing.T) {
+	t.Parallel()
+
+	state := &viewState{outputTTY: true}
+	out := formatSnapshotForView(&session.Snapshot{State: backend.StopState{}}, state, false)
+	if !strings.Contains(out, commandLoopHelp) {
+		t.Fatalf("expected command hints, got %q", out)
+	}
+	if !strings.HasSuffix(out, ">") {
+		t.Fatalf("expected prompt suffix, got %q", out)
+	}
+}
+
+func TestFormatInspectionForViewUsesBlankCanvasInStickyTTY(t *testing.T) {
+	t.Parallel()
+
+	state := &viewState{sticky: true, outputTTY: true}
+	snapshot := &session.Snapshot{
+		Frame: &backend.Frame{Location: backend.SourceLocation{File: "/tmp/main.go", Line: 12, Function: "main.main"}},
+	}
+	out := formatInspectionForView(snapshot, state, "locals", "total (int) = 42\n", true)
+	if !strings.HasPrefix(out, clearScreenANSI) {
+		t.Fatalf("expected clear screen prefix, got %q", out)
+	}
+	if !strings.Contains(out, "locals at ") || !strings.Contains(out, "total (int) = 42") {
+		t.Fatalf("expected inspection screen, got %q", out)
+	}
+	if !strings.Contains(out, "[Esc to return]") {
+		t.Fatalf("expected escape hint, got %q", out)
+	}
+	if !strings.Contains(out, commandLoopHelp) {
+		t.Fatalf("expected command hints, got %q", out)
+	}
+	if !strings.HasSuffix(out, ">") {
+		t.Fatalf("expected prompt suffix, got %q", out)
+	}
+}
+
+func TestRunDebuggerActionClearsInspection(t *testing.T) {
+	t.Parallel()
+
+	state := &viewState{inspectionTitle: "locals", inspectionBody: "total (int) = 42\n"}
+	runner := &fakeCommandRunner{snapshots: []*session.Snapshot{{State: backend.StopState{}}}}
+	var output bytes.Buffer
+	if err := runDebuggerAction(context.Background(), &output, runner, state, session.ActionNext, "next"); err != nil {
+		t.Fatalf("runDebuggerAction returned error: %v", err)
+	}
+	if hasInspection(state) {
+		t.Fatalf("expected inspection to be cleared, got %#v", state)
 	}
 }
 
@@ -290,6 +361,7 @@ type fakeCommandRunner struct {
 	snapshots       []*session.Snapshot
 	snapshotIndex   int
 	breakpoint      *backend.Breakpoint
+	locals          []backend.Variable
 	err             error
 }
 
@@ -323,4 +395,11 @@ func (f *fakeCommandRunner) CreateBreakpoint(_ context.Context, spec backend.Bre
 		return nil, f.err
 	}
 	return f.breakpoint, nil
+}
+
+func (f *fakeCommandRunner) Locals(_ context.Context, _ backend.FrameRef) ([]backend.Variable, error) {
+	if f.err != nil {
+		return nil, f.err
+	}
+	return f.locals, nil
 }
