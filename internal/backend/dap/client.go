@@ -10,6 +10,7 @@ import (
 	"io"
 	"net"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -165,7 +166,7 @@ func (c *Client) Close() error {
 	return errors.Join(errs...)
 }
 
-func (c *Client) Continue(ctx context.Context) (*backend.StopState, error) {
+func (c *Client) runThreadAction(ctx context.Context, command string) (*backend.StopState, error) {
 	threadID, err := func() (int, error) {
 		c.mu.Lock()
 		defer c.mu.Unlock()
@@ -185,7 +186,7 @@ func (c *Client) Continue(ctx context.Context) (*backend.StopState, error) {
 		return nil, err
 	}
 
-	if _, err := c.request(ctx, "continue", map[string]any{"threadId": threadID}); err != nil {
+	if _, err := c.request(ctx, command, map[string]any{"threadId": threadID}); err != nil {
 		return nil, err
 	}
 	if err := c.waitForStop(ctx); err != nil {
@@ -194,8 +195,12 @@ func (c *Client) Continue(ctx context.Context) (*backend.StopState, error) {
 	return c.State(ctx)
 }
 
+func (c *Client) Continue(ctx context.Context) (*backend.StopState, error) {
+	return c.runThreadAction(ctx, "continue")
+}
+
 func (c *Client) Next(ctx context.Context) (*backend.StopState, error) {
-	return nil, backend.ErrUnsupported
+	return c.runThreadAction(ctx, "next")
 }
 
 func (c *Client) StepIn(ctx context.Context) (*backend.StopState, error) {
@@ -297,6 +302,13 @@ func (c *Client) CreateBreakpoint(ctx context.Context, spec backend.BreakpointSp
 	}
 
 	if file, line, ok := parseFileLineLocation(spec.Location); ok {
+		if !filepath.IsAbs(file) {
+			absFile, err := filepath.Abs(file)
+			if err != nil {
+				return nil, fmt.Errorf("resolve breakpoint path %q: %w", file, err)
+			}
+			file = absFile
+		}
 		return c.createBreakpointLocked(ctx, spec, "setBreakpoints", map[string]any{
 			"source": map[string]any{
 				"name": filepathBase(file),

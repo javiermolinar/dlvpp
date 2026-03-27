@@ -4,6 +4,8 @@ go 1.25.0
 
 tool github.com/golangci/golangci-lint/v2/cmd/golangci-lint
 
+require golang.org/x/term v0.41.0
+
 require (
 	4d63.com/gocheckcompilerdirectives v1.3.0 // indirect
 	4d63.com/gochecknoglobals v0.2.2 // indirect
