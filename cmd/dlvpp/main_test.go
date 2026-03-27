@@ -7,6 +7,7 @@ import (
 	"errors"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -15,10 +16,10 @@ import (
 	"dlvpp/internal/session"
 )
 
-func TestParseLaunchArgs(t *testing.T) {
+func TestParseLaunchArgsDefaultsToSticky(t *testing.T) {
 	t.Parallel()
 
-	target, sticky, err := parseLaunchArgs([]string{"-s", "./examples/hello"})
+	target, sticky, err := parseLaunchArgs([]string{"./examples/hello"})
 	if err != nil {
 		t.Fatalf("parseLaunchArgs returned error: %v", err)
 	}
@@ -26,22 +27,51 @@ func TestParseLaunchArgs(t *testing.T) {
 		t.Fatalf("unexpected target: %q", target)
 	}
 	if !sticky {
-		t.Fatal("expected sticky to be enabled")
+		t.Fatal("expected sticky to be enabled by default")
 	}
 }
 
-func TestParseAttachArgs(t *testing.T) {
+func TestParseLaunchArgsPlainDisablesSticky(t *testing.T) {
 	t.Parallel()
 
-	pid, sticky, err := parseAttachArgs([]string{"--sticky", "123"})
+	target, sticky, err := parseLaunchArgs([]string{"--plain", "./examples/hello"})
+	if err != nil {
+		t.Fatalf("parseLaunchArgs returned error: %v", err)
+	}
+	if target != "./examples/hello" {
+		t.Fatalf("unexpected target: %q", target)
+	}
+	if sticky {
+		t.Fatal("expected plain mode to disable sticky output")
+	}
+}
+
+func TestParseAttachArgsPlainDisablesSticky(t *testing.T) {
+	t.Parallel()
+
+	pid, sticky, err := parseAttachArgs([]string{"-p", "123"})
 	if err != nil {
 		t.Fatalf("parseAttachArgs returned error: %v", err)
 	}
 	if pid != 123 {
 		t.Fatalf("unexpected pid: %d", pid)
 	}
-	if !sticky {
-		t.Fatal("expected sticky to be enabled")
+	if sticky {
+		t.Fatal("expected plain mode to disable sticky output")
+	}
+}
+
+func TestUsageDescribesModesAndCommands(t *testing.T) {
+	t.Parallel()
+
+	var output bytes.Buffer
+	usage(&output)
+	text := output.String()
+	if !strings.Contains(text, "Modes:") || !strings.Contains(text, "-p, --plain") {
+		t.Fatalf("expected mode help, got %q", text)
+	}
+	if !strings.Contains(text, "Interactive commands:") || !strings.Contains(text, commandLoopHelp) {
+		t.Fatalf("expected interactive command legend, got %q", text)
 	}
 }
 
@@ -76,8 +106,8 @@ func TestRunCommandLoopRunsNext(t *testing.T) {
 	if len(runner.actions) == 0 || runner.actions[0] != session.ActionNext {
 		t.Fatalf("expected next action, got %v", runner.actions)
 	}
-	if !strings.Contains(output.String(), commandLoopHelp) {
-		t.Fatalf("expected commands help, got %q", output.String())
+	if strings.Contains(output.String(), commandLoopHelp) {
+		t.Fatalf("expected plain mode without commands help, got %q", output.String())
 	}
 }
 
@@ -110,7 +140,7 @@ func TestRunCommandLoopShowsLocals(t *testing.T) {
 	if err := runCommandLoop(context.Background(), bytes.NewBufferString("l\nq\n"), &output, runner, runner.currentSnapshot(), false); err != nil {
 		t.Fatalf("runCommandLoop returned error: %v", err)
 	}
-	if !strings.Contains(output.String(), "locals:\n") || !strings.Contains(output.String(), "total (int) = 42") {
+	if !strings.Contains(output.String(), "locals main.main main.go:12") || !strings.Contains(output.String(), "total (int) = 42") {
 		t.Fatalf("expected locals output, got %q", output.String())
 	}
 }
@@ -143,8 +173,67 @@ func TestRunCommandLoopCreatesBreakpointFromColonCommand(t *testing.T) {
 	if len(runner.breakpointSpecs) == 0 || runner.breakpointSpecs[0].Location != "main.go:12" {
 		t.Fatalf("expected breakpoint location, got %#v", runner.breakpointSpecs)
 	}
-	if !strings.Contains(output.String(), "breakpoint 3 at main.go:12") {
+	if !strings.Contains(output.String(), "bp 3 main.go:12") {
 		t.Fatalf("expected breakpoint output, got %q", output.String())
+	}
+}
+
+func TestFormatSnapshotForViewPlainUsesCompactTokenFriendlyOutput(t *testing.T) {
+	t.Parallel()
+
+	wd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
+	}
+	sourcePath := filepath.Clean(filepath.Join(wd, "..", "..", "examples", "hello", "main.go"))
+	snapshot := &session.Snapshot{
+		State: backend.StopState{},
+		Frame: &backend.Frame{Location: backend.SourceLocation{File: sourcePath, Line: 4, Function: "main.main"}},
+	}
+
+	out := formatSnapshotForView(snapshot, &viewState{sticky: false}, false)
+	expectedHeader := "stop main.main " + displayPath(sourcePath) + ":4"
+	if !strings.Contains(out, expectedHeader) {
+		t.Fatalf("expected compact stop header %q, got %q", expectedHeader, out)
+	}
+	if !strings.Contains(out, "> 4 |") {
+		t.Fatalf("expected compact source window, got %q", out)
+	}
+	if strings.Contains(out, "\x1b[") {
+		t.Fatalf("expected plain output without ANSI escapes, got %q", out)
+	}
+	if strings.Contains(out, commandLoopHelp) {
+		t.Fatalf("expected plain snapshot without repeated help, got %q", out)
+	}
+}
+
+func TestRunCommandLoopPlainOmitsHelpLegend(t *testing.T) {
+	t.Parallel()
+
+	runner := &fakeCommandRunner{
+		snapshots: []*session.Snapshot{{State: backend.StopState{}}},
+	}
+	var output bytes.Buffer
+	if err := runCommandLoop(context.Background(), bytes.NewBufferString("n\nn\nq\n"), &output, runner, runner.currentSnapshot(), false); err != nil {
+		t.Fatalf("runCommandLoop returned error: %v", err)
+	}
+	if strings.Contains(output.String(), commandLoopHelp) {
+		t.Fatalf("expected plain mode without help legend, got %q", output.String())
+	}
+}
+
+func TestRunCommandLoopStickyShowsHelpLegend(t *testing.T) {
+	t.Parallel()
+
+	runner := &fakeCommandRunner{
+		snapshots: []*session.Snapshot{{State: backend.StopState{}}},
+	}
+	var output bytes.Buffer
+	if err := runCommandLoop(context.Background(), bytes.NewBufferString("q\n"), &output, runner, runner.currentSnapshot(), true); err != nil {
+		t.Fatalf("runCommandLoop returned error: %v", err)
+	}
+	if !strings.Contains(output.String(), commandLoopHelp) {
+		t.Fatalf("expected sticky mode help legend, got %q", output.String())
 	}
 }
 
@@ -201,13 +290,26 @@ func TestRunCommandLoopStickyPersistsAcrossStepSnapshots(t *testing.T) {
 	}
 }
 
-func TestFormatSnapshotForViewShowsPromptAndHintsInTTY(t *testing.T) {
+func TestFormatSnapshotForViewShowsPromptAndHintsInStickyTTY(t *testing.T) {
+	t.Parallel()
+
+	state := &viewState{sticky: true, outputTTY: true}
+	out := formatSnapshotForView(&session.Snapshot{State: backend.StopState{}}, state, false)
+	if !strings.Contains(out, commandLoopHelp) {
+		t.Fatalf("expected command hints, got %q", out)
+	}
+	if !strings.HasSuffix(out, ">") {
+		t.Fatalf("expected prompt suffix, got %q", out)
+	}
+}
+
+func TestFormatSnapshotForViewPlainTTYSuppressesRepeatedHints(t *testing.T) {
 	t.Parallel()
 
 	state := &viewState{outputTTY: true}
 	out := formatSnapshotForView(&session.Snapshot{State: backend.StopState{}}, state, false)
-	if !strings.Contains(out, commandLoopHelp) {
-		t.Fatalf("expected command hints, got %q", out)
+	if strings.Contains(out, commandLoopHelp) {
+		t.Fatalf("expected plain tty output without repeated hints, got %q", out)
 	}
 	if !strings.HasSuffix(out, ">") {
 		t.Fatalf("expected prompt suffix, got %q", out)
@@ -239,6 +341,25 @@ func TestFormatInspectionForViewUsesBlankCanvasInStickyTTY(t *testing.T) {
 	}
 }
 
+func TestFormatInspectionForViewPlainUsesCompactHeader(t *testing.T) {
+	t.Parallel()
+
+	state := &viewState{}
+	snapshot := &session.Snapshot{
+		Frame: &backend.Frame{Location: backend.SourceLocation{File: "main.go", Line: 12, Function: "main.main"}},
+	}
+	out := formatInspectionForView(snapshot, state, "locals", "total (int) = 42\n", false)
+	if !strings.Contains(out, "locals main.main main.go:12") {
+		t.Fatalf("expected compact inspection header, got %q", out)
+	}
+	if strings.Contains(out, commandLoopHelp) {
+		t.Fatalf("expected plain inspection without repeated hints, got %q", out)
+	}
+	if !strings.Contains(out, "total (int) = 42") {
+		t.Fatalf("expected locals body, got %q", out)
+	}
+}
+
 func TestRunDebuggerActionClearsInspection(t *testing.T) {
 	t.Parallel()
 
@@ -266,7 +387,7 @@ func TestRunCommandLoopStopsAfterExitSnapshot(t *testing.T) {
 	if len(runner.actions) != 1 {
 		t.Fatalf("expected command loop to stop after exit, got actions %v", runner.actions)
 	}
-	if !strings.Contains(output.String(), "exited with status 0") {
+	if !strings.Contains(output.String(), "exit 0") {
 		t.Fatalf("expected exit output, got %q", output.String())
 	}
 }
@@ -288,7 +409,7 @@ func TestReadCommandReturnsOnContextCancelWhileBlocked(t *testing.T) {
 	t.Parallel()
 
 	reader, writer := io.Pipe()
-	defer reader.Close()
+	defer func() { _ = reader.Close() }()
 
 	ctx, cancel := context.WithCancel(context.Background())
 	result := make(chan error, 1)
@@ -306,18 +427,18 @@ func TestReadCommandReturnsOnContextCancelWhileBlocked(t *testing.T) {
 			t.Fatalf("expected context canceled, got %v", err)
 		}
 	case <-time.After(200 * time.Millisecond):
-		writer.Close()
+		_ = writer.Close()
 		t.Fatal("readCommand did not return after context cancel")
 	}
 
-	writer.Close()
+	_ = writer.Close()
 }
 
 func TestReadByteReturnsOnContextCancelWhileBlocked(t *testing.T) {
 	t.Parallel()
 
 	reader, writer := io.Pipe()
-	defer reader.Close()
+	defer func() { _ = reader.Close() }()
 
 	ctx, cancel := context.WithCancel(context.Background())
 	result := make(chan error, 1)
@@ -335,11 +456,11 @@ func TestReadByteReturnsOnContextCancelWhileBlocked(t *testing.T) {
 			t.Fatalf("expected context canceled, got %v", err)
 		}
 	case <-time.After(200 * time.Millisecond):
-		writer.Close()
+		_ = writer.Close()
 		t.Fatal("readByte did not return after context cancel")
 	}
 
-	writer.Close()
+	_ = writer.Close()
 }
 
 func TestNewlineWriterConvertsLineFeedsForRawTTYOutput(t *testing.T) {

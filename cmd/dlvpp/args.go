@@ -9,23 +9,30 @@ import (
 )
 
 func usage(w io.Writer) {
-	_, _ = fmt.Fprint(w, `dlvpp: opinionated Delve frontend
+	_, _ = fmt.Fprintf(w, `dlvpp: opinionated Delve frontend
 
 Usage:
   dlvpp version
-  dlvpp launch [-s|--sticky] <package-or-path>
-  dlvpp attach [-s|--sticky] <pid>
+  dlvpp launch [-p|--plain] <package-or-path>
+  dlvpp attach [-p|--plain] <pid>
+
+Modes:
+  default         sticky, human-oriented view with re-rendered function context
+  -p, --plain     compact, token-friendly view for agent/LLM-driven debugging
+
+Interactive commands:
+  %s
 
 Examples:
   dlvpp version
   dlvpp launch ./examples/hello
-  dlvpp launch -s ./path/to/your/package
-  dlvpp attach -s 12345
-`)
+  dlvpp launch -p ./path/to/your/package
+  dlvpp attach -p 12345
+`, commandLoopHelp)
 }
 
 func parseLaunchArgs(args []string) (string, bool, error) {
-	fs, sticky := newStickyFlagSet("launch")
+	fs, plain := newPlainFlagSet("launch")
 	if err := fs.Parse(args); err != nil {
 		return "", false, err
 	}
@@ -35,11 +42,11 @@ func parseLaunchArgs(args []string) (string, bool, error) {
 	if fs.NArg() > 1 {
 		return "", false, errors.New("launch accepts exactly one package or path")
 	}
-	return fs.Arg(0), *sticky, nil
+	return fs.Arg(0), !*plain, nil
 }
 
 func parseAttachArgs(args []string) (int, bool, error) {
-	fs, sticky := newStickyFlagSet("attach")
+	fs, plain := newPlainFlagSet("attach")
 	if err := fs.Parse(args); err != nil {
 		return 0, false, err
 	}
@@ -54,15 +61,15 @@ func parseAttachArgs(args []string) (int, bool, error) {
 	if err != nil || pid <= 0 {
 		return 0, false, fmt.Errorf("invalid pid: %q", fs.Arg(0))
 	}
-	return pid, *sticky, nil
+	return pid, !*plain, nil
 }
 
-func newStickyFlagSet(name string) (*flag.FlagSet, *bool) {
+func newPlainFlagSet(name string) (*flag.FlagSet, *bool) {
 	fs := flag.NewFlagSet(name, flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 
-	sticky := new(bool)
-	fs.BoolVar(sticky, "sticky", false, "show the current function after each stop")
-	fs.BoolVar(sticky, "s", false, "show the current function after each stop")
-	return fs, sticky
+	plain := new(bool)
+	fs.BoolVar(plain, "plain", false, "disable sticky mode and use compact plain output")
+	fs.BoolVar(plain, "p", false, "disable sticky mode and use compact plain output")
+	return fs, plain
 }

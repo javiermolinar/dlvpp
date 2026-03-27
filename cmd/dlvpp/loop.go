@@ -43,7 +43,9 @@ func runCommandLoop(ctx context.Context, input io.Reader, output io.Writer, runn
 }
 
 func runLineCommandLoop(ctx context.Context, input io.Reader, output io.Writer, runner commandRunner, state *viewState) error {
-	_, _ = fmt.Fprintln(output, commandLoopHelp)
+	if state != nil && state.sticky {
+		_, _ = fmt.Fprintln(output, commandLoopHelp)
+	}
 
 	reader := bufio.NewReader(input)
 	for {
@@ -214,7 +216,7 @@ func executeCommandText(ctx context.Context, text string, output io.Writer, runn
 		if err != nil {
 			return fmt.Errorf("break: %w", err)
 		}
-		_, _ = fmt.Fprintln(output, formatBreakpoint(bp))
+		_, _ = fmt.Fprintln(output, formatBreakpoint(bp, state))
 		return nil
 	default:
 		return fmt.Errorf("unknown command: %s", command)
@@ -288,7 +290,20 @@ func truncateText(s string, limit int) string {
 	return s[:limit-1] + "…"
 }
 
-func formatBreakpoint(bp *backend.Breakpoint) string {
+func formatBreakpoint(bp *backend.Breakpoint, state *viewState) string {
+	if state != nil && !state.sticky {
+		if bp == nil {
+			return "bp"
+		}
+		if bp.Location.File != "" && bp.Location.Line > 0 {
+			return fmt.Sprintf("bp %d %s:%d", bp.ID, displayPath(bp.Location.File), bp.Location.Line)
+		}
+		if bp.Location.Function != "" {
+			return fmt.Sprintf("bp %d %s", bp.ID, bp.Location.Function)
+		}
+		return fmt.Sprintf("bp %d", bp.ID)
+	}
+
 	if bp == nil {
 		return "breakpoint set"
 	}
