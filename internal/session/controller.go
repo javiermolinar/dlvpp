@@ -229,13 +229,6 @@ func (c *Controller) refreshSnapshot(ctx context.Context) (*Snapshot, error) {
 	return snapshot, nil
 }
 
-func FormatBreakpoint(bp *backend.Breakpoint) string {
-	if bp == nil {
-		return ""
-	}
-	return fmt.Sprintf("default breakpoint: %s at %s:%d\n", bp.Location.Function, bp.Location.File, bp.Location.Line)
-}
-
 func FormatSnapshot(snapshot *Snapshot) string {
 	if snapshot == nil {
 		return ""

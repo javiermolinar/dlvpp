@@ -129,8 +129,6 @@ func runLaunch(target string) error {
 		return fmt.Errorf("launch failed: %w", err)
 	}
 
-	fmt.Printf("launch OK for %s\n", target)
-	fmt.Print(session.FormatBreakpoint(result.Breakpoint))
 	fmt.Print(session.FormatSnapshot(result.Snapshot))
 
 	if err := waitForDisconnect(signalCtx, os.Stdin); err != nil {
