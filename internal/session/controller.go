@@ -41,6 +41,7 @@ type Controller struct {
 type Snapshot struct {
 	State       backend.StopState
 	Frame       *backend.Frame
+	StackError  error
 	Source      string
 	SourceError error
 }
@@ -203,7 +204,9 @@ func (c *Controller) refreshSnapshot(ctx context.Context) (*Snapshot, error) {
 
 	frames, err := c.backend.Stack(ctx, snapshot.State.ThreadID, 1)
 	if err != nil {
-		return nil, fmt.Errorf("stack: %w", err)
+		snapshot.StackError = fmt.Errorf("stack: %w", err)
+		c.lastSnapshot = snapshot
+		return snapshot, nil
 	}
 	if len(frames) == 0 {
 		c.lastSnapshot = snapshot
@@ -245,7 +248,11 @@ func FormatSnapshot(snapshot *Snapshot) string {
 	case snapshot.State.Running:
 		out.WriteString("running\n")
 	case snapshot.Frame == nil:
-		out.WriteString("stopped, but no stack frames available\n")
+		if snapshot.StackError != nil {
+			fmt.Fprintf(&out, "%v\n", snapshot.StackError)
+		} else {
+			out.WriteString("stopped, but no stack frames available\n")
+		}
 	default:
 		fmt.Fprintf(
 			&out,

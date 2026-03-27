@@ -5,10 +5,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
+	"os/signal"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"dlvpp/internal/backend"
@@ -105,7 +108,10 @@ func runDlvVersion() error {
 }
 
 func runLaunch(target string) error {
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	signalCtx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	ctx, cancel := context.WithTimeout(signalCtx, 15*time.Second)
 	defer cancel()
 
 	controller := session.New(dapbackend.New(), session.Options{SourceContextLines: sourceContextLines})
@@ -117,18 +123,30 @@ func runLaunch(target string) error {
 		WorkDir: ".",
 	}, backend.BreakpointSpec{Location: defaultBreakpoint})
 	if err != nil {
+		if errors.Is(err, context.Canceled) {
+			return exitCodeError{code: 130}
+		}
 		return fmt.Errorf("launch failed: %w", err)
 	}
 
 	fmt.Printf("launch OK for %s\n", target)
 	fmt.Print(session.FormatBreakpoint(result.Breakpoint))
 	fmt.Print(session.FormatSnapshot(result.Snapshot))
-	waitForEnter()
+
+	if err := waitForDisconnect(signalCtx, os.Stdin); err != nil {
+		if errors.Is(err, context.Canceled) {
+			return exitCodeError{code: 130}
+		}
+		return fmt.Errorf("wait for disconnect: %w", err)
+	}
 	return nil
 }
 
 func runAttach(pid int) error {
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	signalCtx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	ctx, cancel := context.WithTimeout(signalCtx, 15*time.Second)
 	defer cancel()
 
 	controller := session.New(dapbackend.New(), session.Options{SourceContextLines: sourceContextLines})
@@ -136,19 +154,48 @@ func runAttach(pid int) error {
 
 	result, err := controller.StartAttachSession(ctx, backend.AttachRequest{PID: pid})
 	if err != nil {
+		if errors.Is(err, context.Canceled) {
+			return exitCodeError{code: 130}
+		}
 		return fmt.Errorf("attach failed: %w", err)
 	}
 
 	fmt.Printf("attach OK for pid %d\n", pid)
 	fmt.Print(session.FormatSnapshot(result.Snapshot))
-	waitForEnter()
+
+	if err := waitForDisconnect(signalCtx, os.Stdin); err != nil {
+		if errors.Is(err, context.Canceled) {
+			return exitCodeError{code: 130}
+		}
+		return fmt.Errorf("wait for disconnect: %w", err)
+	}
 	return nil
 }
 
-func waitForEnter() {
+func waitForDisconnect(ctx context.Context, input io.Reader) error {
 	fmt.Println("Press Enter to disconnect...")
-	reader := bufio.NewReader(os.Stdin)
-	_, _ = reader.ReadString('\n')
+
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+
+	result := make(chan error, 1)
+	go func() {
+		reader := bufio.NewReader(input)
+		_, err := reader.ReadString('\n')
+		if errors.Is(err, io.EOF) {
+			result <- nil
+			return
+		}
+		result <- err
+	}()
+
+	select {
+	case err := <-result:
+		return err
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 func closeSession(s interface{ Close() error }) {

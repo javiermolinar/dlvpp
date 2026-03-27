@@ -112,7 +112,7 @@ func TestControllerStartLaunchSessionBootstrapsBreakpointAndContinue(t *testing.
 	}
 }
 
-func TestControllerLaunchClosesBackendWhenSnapshotRefreshFails(t *testing.T) {
+func TestControllerLaunchClosesBackendWhenStateRefreshFails(t *testing.T) {
 	fake := &fakeBackend{
 		stateErr: errors.New("state failed"),
 	}
@@ -124,6 +124,29 @@ func TestControllerLaunchClosesBackendWhenSnapshotRefreshFails(t *testing.T) {
 	}
 	if fake.closeCalls != 1 {
 		t.Fatalf("expected backend to close once, got %d", fake.closeCalls)
+	}
+}
+
+func TestControllerLaunchKeepsSessionOpenWhenStackRefreshFails(t *testing.T) {
+	fake := &fakeBackend{
+		state:    backend.StopState{ThreadID: 1, GoroutineID: 1},
+		stackErr: errors.New("stack failed"),
+	}
+	controller := New(fake, Options{})
+
+	snapshot, err := controller.Launch(context.Background(), backend.LaunchRequest{Target: "./examples/hello"})
+	if err != nil {
+		t.Fatalf("launch: %v", err)
+	}
+	if fake.closeCalls != 0 {
+		t.Fatalf("expected backend to remain open, got %d close calls", fake.closeCalls)
+	}
+	if snapshot == nil || snapshot.StackError == nil {
+		t.Fatal("expected snapshot stack error")
+	}
+	formatted := FormatSnapshot(snapshot)
+	if !strings.Contains(formatted, "stack: stack failed") {
+		t.Fatalf("expected formatted stack error, got %q", formatted)
 	}
 }
 
