@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
+	"strconv"
 	"strings"
 
 	"dlvpp/internal/session"
@@ -11,7 +13,10 @@ import (
 	"golang.org/x/term"
 )
 
-const clearScreenANSI = "\x1b[2J\x1b[H"
+const (
+	clearScreenANSI   = "\x1b[2J\x1b[H"
+	plainContextLines = 1
+)
 
 type viewState struct {
 	sticky          bool
@@ -34,6 +39,13 @@ func newViewState(sticky bool, output io.Writer, initialSnapshot *session.Snapsh
 }
 
 func formatSnapshotForView(snapshot *session.Snapshot, state *viewState, clear bool) string {
+	if state == nil || state.sticky {
+		return formatStickySnapshotForView(snapshot, state, clear)
+	}
+	return appendPrompt(formatPlainSnapshot(snapshot), state)
+}
+
+func formatStickySnapshotForView(snapshot *session.Snapshot, state *viewState, clear bool) string {
 	if snapshot == nil || state == nil || !state.sticky {
 		return appendPrompt(session.FormatSnapshot(snapshot), state)
 	}
@@ -66,6 +78,45 @@ func formatSnapshotForView(snapshot *session.Snapshot, state *viewState, clear b
 	return appendPrompt(out.String(), state)
 }
 
+func formatPlainSnapshot(snapshot *session.Snapshot) string {
+	if snapshot == nil {
+		return ""
+	}
+
+	var out strings.Builder
+	switch {
+	case snapshot.State.Exited:
+		fmt.Fprintf(&out, "exit %d\n", snapshot.State.ExitStatus)
+	case snapshot.State.Running:
+		out.WriteString("running\n")
+	case snapshot.Frame == nil:
+		if snapshot.StackError != nil {
+			fmt.Fprintf(&out, "err stack: %v\n", snapshot.StackError)
+		} else {
+			out.WriteString("stop no-frame\n")
+		}
+	default:
+		fmt.Fprintf(
+			&out,
+			"stop %s %s:%d\n",
+			fallbackText(snapshot.Frame.Location.Function, "<unknown>"),
+			displayPath(snapshot.Frame.Location.File),
+			snapshot.Frame.Location.Line,
+		)
+		source, err := renderPlainWindow(snapshot.Frame.Location.File, snapshot.Frame.Location.Line, plainContextLines)
+		if err != nil {
+			fmt.Fprintf(&out, "err source: %v\n", err)
+			break
+		}
+		out.WriteString(source)
+		if snapshot.SourceError != nil {
+			fmt.Fprintf(&out, "err source: %v\n", snapshot.SourceError)
+		}
+	}
+
+	return out.String()
+}
+
 func setInspection(state *viewState, title string, body string) {
 	if state == nil {
 		return
@@ -87,7 +138,10 @@ func hasInspection(state *viewState) bool {
 }
 
 func formatInspectionForView(snapshot *session.Snapshot, state *viewState, title string, body string, clear bool) string {
-	if state == nil || !state.sticky || !state.outputTTY {
+	if state == nil || !state.sticky {
+		return appendPrompt(formatPlainInspection(snapshot, title, body), state)
+	}
+	if !state.outputTTY {
 		return appendPrompt(title+":\n"+body, state)
 	}
 
@@ -113,15 +167,37 @@ func formatInspectionForView(snapshot *session.Snapshot, state *viewState, title
 	return appendPrompt(out.String(), state)
 }
 
+func formatPlainInspection(snapshot *session.Snapshot, title string, body string) string {
+	trimmedBody := strings.TrimRight(body, "\n")
+	if snapshot != nil && snapshot.Frame != nil {
+		return fmt.Sprintf(
+			"%s %s %s:%d\n%s\n",
+			title,
+			fallbackText(snapshot.Frame.Location.Function, "<unknown>"),
+			displayPath(snapshot.Frame.Location.File),
+			snapshot.Frame.Location.Line,
+			trimmedBody,
+		)
+	}
+	if trimmedBody == "" {
+		return title + "\n"
+	}
+	return title + "\n" + trimmedBody + "\n"
+}
+
 func appendPrompt(text string, state *viewState) string {
 	if state == nil || !state.outputTTY {
 		return text
 	}
-	trimmed := strings.TrimPrefix(text, commandLoopHelp+"\n")
+	trimmed := strings.TrimSuffix(text, commandLoopHelp+"\n>")
+	trimmed = strings.TrimSuffix(trimmed, ">")
 	if trimmed == "" || trimmed[len(trimmed)-1] != '\n' {
 		trimmed += "\n"
 	}
-	return trimmed + commandLoopHelp + "\n>"
+	if state.sticky {
+		return trimmed + commandLoopHelp + "\n>"
+	}
+	return trimmed + ">"
 }
 
 func maybeClear(state *viewState, clear bool) string {
@@ -129,4 +205,55 @@ func maybeClear(state *viewState, clear bool) string {
 		return clearScreenANSI
 	}
 	return ""
+}
+
+func displayPath(path string) string {
+	if path == "" {
+		return "<unknown>"
+	}
+	wd, err := os.Getwd()
+	if err != nil {
+		return filepath.Clean(path)
+	}
+	rel, err := filepath.Rel(wd, path)
+	if err != nil {
+		return filepath.Clean(path)
+	}
+	if strings.HasPrefix(rel, ".."+string(filepath.Separator)) || rel == ".." {
+		return filepath.Clean(path)
+	}
+	return filepath.Clean(rel)
+}
+
+func renderPlainWindow(path string, line int, contextLines int) (string, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return "", fmt.Errorf("read source: %w", err)
+	}
+
+	lines := strings.Split(string(data), "\n")
+	if line <= 0 || line > len(lines) {
+		return "", fmt.Errorf("source line out of range: %d", line)
+	}
+
+	start := max(1, line-contextLines)
+	end := min(len(lines), line+contextLines)
+	width := len(strconv.Itoa(end))
+
+	var out strings.Builder
+	for i := start; i <= end; i++ {
+		marker := " "
+		if i == line {
+			marker = ">"
+		}
+		fmt.Fprintf(&out, "%s %*d | %s\n", marker, width, i, lines[i-1])
+	}
+	return out.String(), nil
+}
+
+func fallbackText(value string, fallback string) string {
+	if value == "" {
+		return fallback
+	}
+	return value
 }

@@ -7,8 +7,10 @@ Minimal, opinionated Delve frontend for Go.
 ```bash
 go run ./cmd/dlvpp version
 go run ./cmd/dlvpp launch ./examples/hello
+go run ./cmd/dlvpp launch --plain ./examples/hello
 go run ./cmd/dlvpp launch ./path/to/your/package
 go run ./cmd/dlvpp attach <pid>
+go run ./cmd/dlvpp attach --plain <pid>
 ```
 
 ## Current behavior
@@ -17,10 +19,26 @@ go run ./cmd/dlvpp attach <pid>
 - starts a DAP-backed Delve session
 - sets a default breakpoint at `main.main`
 - continues to that breakpoint
-- prints the stopped location
-- shows 5 lines of source above and below the current line
-- applies basic Go syntax highlighting using `go/scanner`
-- waits for Enter before disconnecting
+- waits for interactive debugger commands until quit
+
+### Output modes
+
+- **Sticky mode (default)**
+  - human-oriented output
+  - re-renders the current function after each stop
+  - keeps the interactive command legend visible in the terminal UI
+- **Plain mode (`--plain`, `-p`)**
+  - compact, token-friendly output for agent/LLM-driven debugging
+  - prints a small non-sticky source window around the current line
+  - omits the runtime command legend to reduce noise; use `dlvpp help` for the command reference
+
+### Interactive commands
+
+- `n` — next
+- `s` — step in
+- `l` — show locals for the current frame
+- `:b <location>` — create a breakpoint
+- `q` — quit the session
 
 ## Example
 
