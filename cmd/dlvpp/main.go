@@ -13,14 +13,12 @@ import (
 
 	"dlvpp/internal/backend"
 	dapbackend "dlvpp/internal/backend/dap"
-	"dlvpp/internal/sourceview"
+	"dlvpp/internal/session"
 )
 
 const (
 	defaultBreakpoint  = "main.main"
 	sourceContextLines = 5
-	ansiReset          = "\x1b[0m"
-	ansiCyan           = "\x1b[36m"
 )
 
 func main() {
@@ -110,26 +108,21 @@ func runLaunch(target string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
-	client := dapbackend.New()
-	if err := client.Launch(ctx, backend.LaunchRequest{
+	controller := session.New(dapbackend.New(), session.Options{SourceContextLines: sourceContextLines})
+	defer closeSession(controller)
+
+	result, err := controller.StartLaunchSession(ctx, backend.LaunchRequest{
 		Mode:    backend.LaunchModeDebug,
 		Target:  target,
 		WorkDir: ".",
-	}); err != nil {
+	}, backend.BreakpointSpec{Location: defaultBreakpoint})
+	if err != nil {
 		return fmt.Errorf("launch failed: %w", err)
 	}
-	defer closeBackend(client)
 
 	fmt.Printf("launch OK for %s\n", target)
-	bp, err := client.CreateBreakpoint(ctx, backend.BreakpointSpec{Location: defaultBreakpoint})
-	if err != nil {
-		return fmt.Errorf("set default breakpoint: %w", err)
-	}
-	fmt.Printf("default breakpoint: %s at %s:%d\n", bp.Location.Function, bp.Location.File, bp.Location.Line)
-	if _, err := client.Continue(ctx); err != nil {
-		return fmt.Errorf("continue: %w", err)
-	}
-	printCurrentLocation(ctx, client)
+	fmt.Print(session.FormatBreakpoint(result.Breakpoint))
+	fmt.Print(session.FormatSnapshot(result.Snapshot))
 	waitForEnter()
 	return nil
 }
@@ -138,47 +131,18 @@ func runAttach(pid int) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
-	client := dapbackend.New()
-	if err := client.Attach(ctx, backend.AttachRequest{PID: pid}); err != nil {
+	controller := session.New(dapbackend.New(), session.Options{SourceContextLines: sourceContextLines})
+	defer closeSession(controller)
+
+	result, err := controller.StartAttachSession(ctx, backend.AttachRequest{PID: pid})
+	if err != nil {
 		return fmt.Errorf("attach failed: %w", err)
 	}
-	defer closeBackend(client)
 
 	fmt.Printf("attach OK for pid %d\n", pid)
-	printCurrentLocation(ctx, client)
+	fmt.Print(session.FormatSnapshot(result.Snapshot))
 	waitForEnter()
 	return nil
-}
-
-func printCurrentLocation(ctx context.Context, b backend.Backend) {
-	state, err := b.State(ctx)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "state error: %v\n", err)
-		return
-	}
-
-	frames, err := b.Stack(ctx, state.ThreadID, 1)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "stack error: %v\n", err)
-		return
-	}
-	if len(frames) == 0 {
-		fmt.Println("stopped, but no stack frames available")
-		return
-	}
-
-	frame := frames[0]
-	fmt.Printf("stopped: %s at %s%s:%d%s\n", frame.Location.Function, ansiCyan, frame.Location.File, frame.Location.Line, ansiReset)
-	printSourceWindow(frame.Location.File, frame.Location.Line, sourceContextLines)
-}
-
-func printSourceWindow(path string, line int, contextLines int) {
-	rendered, err := sourceview.RenderWindow(path, line, contextLines)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "%v\n", err)
-		return
-	}
-	fmt.Print(rendered)
 }
 
 func waitForEnter() {
@@ -187,8 +151,8 @@ func waitForEnter() {
 	_, _ = reader.ReadString('\n')
 }
 
-func closeBackend(b backend.Backend) {
-	if err := b.Close(); err != nil && !strings.Contains(err.Error(), "use of closed network connection") {
+func closeSession(s interface{ Close() error }) {
+	if err := s.Close(); err != nil && !strings.Contains(err.Error(), "use of closed network connection") {
 		fmt.Fprintf(os.Stderr, "close backend: %v\n", err)
 		os.Exit(1)
 	}

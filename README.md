@@ -41,6 +41,7 @@ go run ./cmd/dlvpp launch ./examples/hello
 - [x] Add lightweight Go syntax highlighting with `go/scanner` and `go/token`.
 - [x] Add build, test, lint, and fmt workflows via `Makefile`.
 - [x] Split source rendering into `internal/sourceview/` and DAP wire types into `internal/backend/dap/types.go`.
+- [x] Move session orchestration and snapshot building into `internal/session/` so future REPL/TUI frontends can share one controller.
 
 ### Next
 - [ ] Implement stepping commands: `next`, `step in`, `step out`, `pause`.
@@ -59,6 +60,7 @@ go run ./cmd/dlvpp launch ./examples/hello
 - `cmd/dlvpp/main.go` — CLI entrypoint
 - `internal/backend/backend.go` — transport-neutral debugger interface
 - `internal/backend/dap/` — DAP adapter
+- `internal/session/` — shared session controller and snapshot building for CLI/REPL/TUI frontends
 - `internal/sourceview/` — source window rendering and Go syntax highlighting
 - `examples/hello/` — sample target program
 
@@ -70,3 +72,4 @@ make test
 make build
 go run ./cmd/dlvpp launch ./examples/hello
 ```
+
