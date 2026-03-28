@@ -132,9 +132,16 @@ OUTPUT-END
 ### Next likely improvements
 
 - `step out` and `pause` commands
-- expression evaluation (`p <expr>` style UX)
+- first-class test debugging, including launching a package in test mode and targeting a specific test or subtest by name
+- expression evaluation (`p <expr>` style UX), with variable mutation or assignment as a later follow-up once session/state tracking is mature enough
 - breakpoint listing and clearing
-- goroutine inspection and selection
+- code-comment breakpoints such as `//breakpoint` or `// dlvpp:breakpoint` that resolve into file/line breakpoints on launch
+- first-class breakpoint management, with `b` to list active breakpoints and `:b ...` to create, search, and manage them interactively
+- scoped breakpoint search, for example filtering files first and then resolving matching function symbols from that subset (ripgrep-style targets like `@modules/hola:New`)
+- goroutine listing and navigation, including selecting a goroutine to inspect its stack and current source location
+- optional pprof/profile capture and inspection during debug sessions, with profile artifacts or summaries attached to session exports
+- session export for postmortem and LLM-assisted analysis (for example, a structured HTML timeline with stops, source, output, and locals changes)
+- session handover between human and LLM operators, including saved debugger context, detach/reattach workflows, and state restoration in a new `dlvpp` instance
 - deciding whether a richer TUI is worth adding later
 
 ## Validation
