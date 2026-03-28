@@ -311,6 +311,37 @@ func TestFormatSnapshotForViewShowsPromptAndHintsInStickyTTY(t *testing.T) {
 	}
 }
 
+func TestFormatSnapshotForViewStickyTTYUsesTerminalHeight(t *testing.T) {
+	t.Parallel()
+
+	tempDir := t.TempDir()
+	sourcePath := filepath.Join(tempDir, "main.txt")
+	var source strings.Builder
+	for i := 1; i <= 20; i++ {
+		fmt.Fprintf(&source, "line%02d\n", i)
+	}
+	if err := os.WriteFile(sourcePath, []byte(source.String()), 0o600); err != nil {
+		t.Fatalf("write source fixture: %v", err)
+	}
+
+	state := &viewState{sticky: true, outputTTY: true, outputHeight: 12}
+	snapshot := &session.Snapshot{
+		State: backend.StopState{},
+		Frame: &backend.Frame{Location: backend.SourceLocation{File: sourcePath, Line: 10, Function: "main.main"}},
+	}
+	out := formatSnapshotForView(snapshot, state, false)
+	for _, want := range []string{"line07", "line10", "line13"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("expected sticky tty output to contain %q, got %q", want, out)
+		}
+	}
+	for _, unwanted := range []string{"line06", "line14"} {
+		if strings.Contains(out, unwanted) {
+			t.Fatalf("expected sticky tty output to respect terminal height and omit %q, got %q", unwanted, out)
+		}
+	}
+}
+
 func TestFormatSnapshotForViewPlainTTYSuppressesRepeatedHints(t *testing.T) {
 	t.Parallel()
 

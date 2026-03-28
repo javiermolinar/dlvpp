@@ -14,13 +14,15 @@ import (
 )
 
 const (
-	clearScreenANSI   = "\x1b[2J\x1b[H"
-	plainContextLines = 1
+	clearScreenANSI       = "\x1b[2J\x1b[H"
+	plainContextLines     = 1
+	stickyReservedRowsTTY = 5
 )
 
 type viewState struct {
 	sticky          bool
 	outputTTY       bool
+	outputHeight    int
 	currentSnapshot *session.Snapshot
 	inspectionTitle string
 	inspectionBody  string
@@ -28,12 +30,20 @@ type viewState struct {
 
 func newViewState(sticky bool, output io.Writer, initialSnapshot *session.Snapshot) *viewState {
 	outputTTY := false
+	outputHeight := 0
 	if file, ok := output.(*os.File); ok {
 		outputTTY = term.IsTerminal(int(file.Fd()))
+		if outputTTY {
+			_, height, err := term.GetSize(int(file.Fd()))
+			if err == nil {
+				outputHeight = height
+			}
+		}
 	}
 	return &viewState{
 		sticky:          sticky,
 		outputTTY:       outputTTY,
+		outputHeight:    outputHeight,
 		currentSnapshot: initialSnapshot,
 	}
 }
@@ -55,13 +65,9 @@ func formatStickySnapshotForView(snapshot *session.Snapshot, state *viewState, c
 		return appendPrompt(maybeClear(state, clear)+base, state)
 	}
 
-	source := snapshot.Source
-	if source == "" {
-		var err error
-		source, err = sourceview.RenderWindow(snapshot.Frame.Location.File, snapshot.Frame.Location.Line, sourceContextLines)
-		if err != nil {
-			return appendPrompt(maybeClear(state, clear)+base+fmt.Sprintf("sticky render: %v\n", err), state)
-		}
+	source, err := renderStickySource(snapshot, state)
+	if err != nil {
+		return appendPrompt(maybeClear(state, clear)+base+fmt.Sprintf("sticky render: %v\n", err), state)
 	}
 
 	var out strings.Builder
@@ -80,6 +86,24 @@ func formatStickySnapshotForView(snapshot *session.Snapshot, state *viewState, c
 		fmt.Fprintf(&out, "%v\n", snapshot.SourceError)
 	}
 	return appendPrompt(out.String(), state)
+}
+
+func renderStickySource(snapshot *session.Snapshot, state *viewState) (string, error) {
+	if snapshot == nil || snapshot.Frame == nil {
+		return "", nil
+	}
+	if state != nil && state.outputTTY && state.outputHeight > stickyReservedRowsTTY {
+		visibleLines := max(1, state.outputHeight-stickyReservedRowsTTY)
+		before := (visibleLines - 1) / 2
+		after := visibleLines - before - 1
+		start := max(1, snapshot.Frame.Location.Line-before)
+		end := snapshot.Frame.Location.Line + after
+		return sourceview.RenderRange(snapshot.Frame.Location.File, snapshot.Frame.Location.Line, start, end)
+	}
+	if snapshot.Source != "" {
+		return snapshot.Source, nil
+	}
+	return sourceview.RenderWindow(snapshot.Frame.Location.File, snapshot.Frame.Location.Line, sourceContextLines)
 }
 
 func formatPlainSnapshot(snapshot *session.Snapshot) string {
