@@ -8,7 +8,7 @@ Minimal, opinionated Delve frontend for Go.
 
 - launch a Go package/path with a default breakpoint at `main.main`
 - attach to an existing process by PID
-- step with `next` and `step in`
+- continue execution, step with `next`, and step in
 - inspect locals for the current frame
 - inspect captured program output (`stdout`/`stderr`) during or after execution
 - create breakpoints interactively with `:b <location>`
@@ -69,6 +69,7 @@ dlvpp attach [-p|--plain] <pid>
 
 ## Interactive commands
 
+- `c` — continue
 - `n` — next
 - `s` — step in
 - `l` — show locals for the current frame
@@ -122,7 +123,7 @@ OUTPUT-END
 - sticky terminal rendering with height-aware source windows
 - compact plain output mode
 - interactive command loop
-- `next` and `step in`
+- `continue`, `next`, and `step in`
 - locals inspection
 - captured output inspection
 - interactive breakpoint creation
@@ -130,7 +131,7 @@ OUTPUT-END
 
 ### Next likely improvements
 
-- `continue`, `step out`, and `pause` commands
+- `step out` and `pause` commands
 - expression evaluation (`p <expr>` style UX)
 - breakpoint listing and clearing
 - goroutine inspection and selection

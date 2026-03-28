@@ -24,7 +24,7 @@ const (
 	ttyEscape            = 27
 	ttyBackspace         = 8
 	ttyDelete            = 127
-	commandLoopHelp      = "Commands: n=next, s=step in, l=locals, o=output, :b <location>, q=quit"
+	commandLoopHelp      = "Commands: c=continue, n=next, s=step in, l=locals, o=output, :b <location>, q=quit"
 	ansiReset            = "\x1b[0m"
 	ansiDim              = "\x1b[2m"
 	ansiCyan             = "\x1b[36m"
@@ -110,6 +110,13 @@ func runTTYCommandLoop(ctx context.Context, input *os.File, output io.Writer, ru
 		case 'q':
 			if !commandMode {
 				return nil
+			}
+		case 'c':
+			if !commandMode {
+				if done, err := processCommand(ctx, output, runner, state, "c"); done || err != nil {
+					return err
+				}
+				continue
 			}
 		case 'n':
 			if !commandMode {
@@ -227,6 +234,8 @@ func executeCommandText(ctx context.Context, text string, output io.Writer, runn
 	switch command {
 	case "q":
 		return errQuitCommandLoop
+	case "c":
+		return runDebuggerAction(ctx, output, runner, state, session.ActionContinue, "continue")
 	case "n":
 		return runDebuggerAction(ctx, output, runner, state, session.ActionNext, "next")
 	case "s":

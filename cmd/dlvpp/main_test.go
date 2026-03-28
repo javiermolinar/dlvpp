@@ -93,6 +93,24 @@ func TestRunCommandLoopReturnsOnQuit(t *testing.T) {
 	}
 }
 
+func TestRunCommandLoopRunsContinue(t *testing.T) {
+	t.Parallel()
+
+	runner := &fakeCommandRunner{
+		snapshots: []*session.Snapshot{{State: backend.StopState{}}},
+	}
+	var output bytes.Buffer
+	if err := runCommandLoop(context.Background(), bytes.NewBufferString("c\nq\n"), &output, runner, runner.currentSnapshot(), false); err != nil {
+		t.Fatalf("runCommandLoop returned error: %v", err)
+	}
+	if len(runner.actions) == 0 || runner.actions[0] != session.ActionContinue {
+		t.Fatalf("expected continue action, got %v", runner.actions)
+	}
+	if strings.Contains(output.String(), commandLoopHelp) {
+		t.Fatalf("expected plain mode without commands help, got %q", output.String())
+	}
+}
+
 func TestRunCommandLoopRunsNext(t *testing.T) {
 	t.Parallel()
 
