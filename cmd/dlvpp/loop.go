@@ -36,7 +36,6 @@ const (
 
 var (
 	errQuitCommandLoop = errors.New("quit command loop")
-	errProgramExited   = errors.New("program already exited")
 )
 
 type commandRunner interface {
@@ -98,6 +97,16 @@ func runTTYCommandLoop(ctx context.Context, input *os.File, output io.Writer, ru
 		b, err := reader.Next(ctx)
 		if err != nil {
 			return err
+		}
+
+		if sessionExited(state) && !commandMode {
+			if b == 'o' && !hasInspection(state) {
+				if done, err := processCommand(ctx, output, runner, state, "o"); done || err != nil {
+					return err
+				}
+				continue
+			}
+			return nil
 		}
 
 		switch b {
@@ -173,7 +182,7 @@ func runTTYCommandLoop(ctx context.Context, input *os.File, output io.Writer, ru
 			}
 			_, _ = fmt.Fprintln(output)
 			commandMode = false
-			if done, err := processCommand(ctx, output, runner, state, strings.TrimSpace(string(commandBuf))); done || err != nil {
+			if done, err := processCommand(ctx, output, runner, state, ttyCommandText(commandBuf)); done || err != nil {
 				return err
 			}
 			commandBuf = commandBuf[:0]
@@ -205,6 +214,10 @@ func runTTYCommandLoop(ctx context.Context, input *os.File, output io.Writer, ru
 		commandBuf = append(commandBuf, b)
 		_, _ = fmt.Fprintf(output, "%c", b)
 	}
+}
+
+func ttyCommandText(commandBuf []byte) string {
+	return ":" + strings.TrimSpace(string(commandBuf))
 }
 
 func processCommand(ctx context.Context, output io.Writer, runner commandRunner, state *viewState, text string) (bool, error) {
@@ -242,8 +255,11 @@ func executeCommandText(ctx context.Context, text string, output io.Writer, runn
 	command := parts[0]
 	args := parts[1:]
 
-	if sessionExited(state) && command != "q" && command != "o" && command != "h" && command != "b" {
-		return errProgramExited
+	if sessionExited(state) {
+		if command == "o" {
+			return showOutput(ctx, output, runner, state)
+		}
+		return errQuitCommandLoop
 	}
 
 	switch command {
@@ -271,6 +287,11 @@ func executeCommandText(ctx context.Context, text string, output io.Writer, runn
 			return fmt.Errorf("break: %w", err)
 		}
 		rememberBreakpoint(state, bp)
+		if state != nil && state.sticky && state.currentSnapshot != nil {
+			clearInspection(state)
+			_, _ = fmt.Fprint(output, formatSnapshotForView(state.currentSnapshot, state, true))
+			return nil
+		}
 		_, _ = fmt.Fprintln(output, formatBreakpoint(bp, state))
 		return nil
 	case "c":

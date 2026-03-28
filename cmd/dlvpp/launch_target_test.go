@@ -63,6 +63,33 @@ func TestNewLaunchRequestLeavesMissingGoFileUntouched(t *testing.T) {
 	}
 }
 
+func TestNewTestLaunchRequestUsesTestModeAndRunArgs(t *testing.T) {
+	t.Parallel()
+
+	req, err := newTestLaunchRequest("./pkg/parser", "TestParse/case-1")
+	if err != nil {
+		t.Fatalf("newTestLaunchRequest returned error: %v", err)
+	}
+	if req.Mode != "test" {
+		t.Fatalf("expected test mode, got %q", req.Mode)
+	}
+	if req.Target != "./pkg/parser" {
+		t.Fatalf("unexpected target: %q", req.Target)
+	}
+	wantArgs := []string{"-test.run", "^TestParse$/^case-1$"}
+	if strings.Join(req.Args, "|") != strings.Join(wantArgs, "|") {
+		t.Fatalf("unexpected test args: got %#v want %#v", req.Args, wantArgs)
+	}
+}
+
+func TestTopLevelTestNameUsesFirstPathSegment(t *testing.T) {
+	t.Parallel()
+
+	if got := topLevelTestName("TestParse/case-1"); got != "TestParse" {
+		t.Fatalf("unexpected top-level test name: %q", got)
+	}
+}
+
 func mustWriteFile(t *testing.T, path string, content string) {
 	t.Helper()
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {

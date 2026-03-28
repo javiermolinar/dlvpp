@@ -14,6 +14,7 @@ func usage(w io.Writer) {
 Usage:
   dlvpp version
   dlvpp launch [-p|--plain] <package-or-path>
+  dlvpp test [-p|--plain] <package-or-path> <test-or-subtest>
   dlvpp attach [-p|--plain] <pid>
 
 Modes:
@@ -28,6 +29,8 @@ Examples:
   dlvpp version
   dlvpp launch ./examples/hello
   dlvpp launch -p ./path/to/your/package
+  dlvpp test ./pkg/parser TestParse
+  dlvpp test -p ./pkg/parser 'TestParse/case-1'
   dlvpp attach -p 12345
 `, commandHelpSummary)
 }
@@ -44,6 +47,24 @@ func parseLaunchArgs(args []string) (string, bool, error) {
 		return "", false, errors.New("launch accepts exactly one package or path")
 	}
 	return fs.Arg(0), !*plain, nil
+}
+
+func parseTestArgs(args []string) (string, string, bool, error) {
+	fs, plain := newPlainFlagSet("test")
+	if err := fs.Parse(args); err != nil {
+		return "", "", false, err
+	}
+	if fs.NArg() == 0 {
+		return "", "", false, errors.New("test requires a package or path")
+	}
+	if fs.NArg() == 1 {
+		return "", "", false, errors.New("test requires a test or subtest name")
+	}
+	if fs.NArg() > 2 {
+		return "", "", false, errors.New("test accepts exactly one package or path and one test or subtest name")
+	}
+
+	return fs.Arg(0), fs.Arg(1), !*plain, nil
 }
 
 func parseAttachArgs(args []string) (int, bool, error) {

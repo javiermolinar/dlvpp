@@ -41,6 +41,17 @@ func run(args []string) error {
 			return exitCodeError{code: 2, err: err}
 		}
 		return runLaunch(target, sticky)
+	case "test":
+		target, selector, sticky, err := parseTestArgs(args[1:])
+		if err != nil {
+			if errors.Is(err, flag.ErrHelp) {
+				usage(os.Stdout)
+				return nil
+			}
+			usage(os.Stderr)
+			return exitCodeError{code: 2, err: err}
+		}
+		return runTest(target, selector, sticky)
 	case "attach":
 		pid, sticky, err := parseAttachArgs(args[1:])
 		if err != nil {

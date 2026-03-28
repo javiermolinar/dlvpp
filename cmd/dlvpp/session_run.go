@@ -19,7 +19,7 @@ import (
 const (
 	defaultBreakpoint  = "main.main"
 	sourceContextLines = 5
-	bootstrapTimeout   = 15 * time.Second
+	bootstrapTimeout   = 60 * time.Second
 )
 
 func runDlvVersion() error {
@@ -57,6 +57,31 @@ func runLaunch(target string, sticky bool) error {
 				return exitCodeError{code: 130}
 			}
 			return fmt.Errorf("launch failed: %w", err)
+		}
+
+		initialBreakpoints := initialBreakpointLocations(result.Breakpoint)
+		printSnapshot(os.Stdout, result.Snapshot, sticky, initialBreakpoints)
+		return runInteractiveSession(signalCtx, controller, result.Snapshot, sticky, initialBreakpoints)
+	})
+}
+
+func runTest(target string, selector string, sticky bool) error {
+	signalCtx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	return withController(signalCtx, func(startCtx context.Context, controller *session.Controller) error {
+		launchReq, err := newTestLaunchRequest(target, selector)
+		if err != nil {
+			return fmt.Errorf("resolve test target: %w", err)
+		}
+
+		breakpoint := topLevelTestName(selector)
+		result, err := controller.StartLaunchSession(startCtx, launchReq, backend.BreakpointSpec{Location: breakpoint})
+		if err != nil {
+			if errors.Is(err, context.Canceled) {
+				return exitCodeError{code: 130}
+			}
+			return fmt.Errorf("test launch failed: %w", err)
 		}
 
 		initialBreakpoints := initialBreakpointLocations(result.Breakpoint)

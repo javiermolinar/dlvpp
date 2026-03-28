@@ -46,6 +46,54 @@ func TestParseLaunchArgsPlainDisablesSticky(t *testing.T) {
 	}
 }
 
+func TestParseTestArgsDefaultsToSticky(t *testing.T) {
+	t.Parallel()
+
+	target, selector, sticky, err := parseTestArgs([]string{"./pkg/parser", "TestParse"})
+	if err != nil {
+		t.Fatalf("parseTestArgs returned error: %v", err)
+	}
+	if target != "./pkg/parser" {
+		t.Fatalf("unexpected target: %q", target)
+	}
+	if selector != "TestParse" {
+		t.Fatalf("unexpected selector: %q", selector)
+	}
+	if !sticky {
+		t.Fatal("expected sticky to be enabled by default")
+	}
+}
+
+func TestParseTestArgsRequiresSelector(t *testing.T) {
+	t.Parallel()
+
+	_, _, _, err := parseTestArgs([]string{"./pkg/parser"})
+	if err == nil {
+		t.Fatal("expected parseTestArgs to require a selector")
+	}
+	if !strings.Contains(err.Error(), "test or subtest name") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestParseTestArgsPlainDisablesSticky(t *testing.T) {
+	t.Parallel()
+
+	target, selector, sticky, err := parseTestArgs([]string{"--plain", "./pkg/parser", "TestParse/case-1"})
+	if err != nil {
+		t.Fatalf("parseTestArgs returned error: %v", err)
+	}
+	if target != "./pkg/parser" {
+		t.Fatalf("unexpected target: %q", target)
+	}
+	if selector != "TestParse/case-1" {
+		t.Fatalf("unexpected selector: %q", selector)
+	}
+	if sticky {
+		t.Fatal("expected plain mode to disable sticky output")
+	}
+}
+
 func TestParseAttachArgsPlainDisablesSticky(t *testing.T) {
 	t.Parallel()
 
@@ -242,6 +290,14 @@ func TestRunCommandLoopRejectsLongFormCommands(t *testing.T) {
 	}
 }
 
+func TestTTYCommandTextPreservesColonCommandMode(t *testing.T) {
+	t.Parallel()
+
+	if got := ttyCommandText([]byte("b 7")); got != ":b 7" {
+		t.Fatalf("expected tty command text %q, got %q", ":b 7", got)
+	}
+}
+
 func TestRunCommandLoopCreatesBreakpointFromColonCommand(t *testing.T) {
 	t.Parallel()
 
@@ -260,6 +316,39 @@ func TestRunCommandLoopCreatesBreakpointFromColonCommand(t *testing.T) {
 	}
 	if !strings.Contains(output.String(), "bp 3 main.go:12") {
 		t.Fatalf("expected breakpoint output, got %q", output.String())
+	}
+}
+
+func TestRunCommandLoopStickyReprintsSnapshotAfterBreakpointCreate(t *testing.T) {
+	t.Parallel()
+
+	tempDir := t.TempDir()
+	sourcePath := filepath.Join(tempDir, "main.go")
+	source := "package main\n\nfunc main() {\n\tprintln(\"hello\")\n}\n"
+	if err := os.WriteFile(sourcePath, []byte(source), 0o600); err != nil {
+		t.Fatalf("write source fixture: %v", err)
+	}
+
+	runner := &fakeCommandRunner{
+		breakpoint: &backend.Breakpoint{
+			ID:       2,
+			Location: backend.SourceLocation{File: sourcePath, Line: 4, Function: "main.main"},
+		},
+		snapshots: []*session.Snapshot{{
+			State: backend.StopState{},
+			Frame: &backend.Frame{Location: backend.SourceLocation{File: sourcePath, Line: 3, Function: "main.main"}},
+		}},
+	}
+	var output bytes.Buffer
+	if err := runCommandLoop(context.Background(), bytes.NewBufferString(":b 4\nq\n"), &output, runner, runner.currentSnapshot(), true); err != nil {
+		t.Fatalf("runCommandLoop returned error: %v", err)
+	}
+	text := output.String()
+	if strings.Contains(text, "breakpoint 2 at") {
+		t.Fatalf("expected sticky mode to rerender instead of printing breakpoint summary, got %q", text)
+	}
+	if !strings.Contains(text, "4 ●") {
+		t.Fatalf("expected sticky rerender with breakpoint marker, got %q", text)
 	}
 }
 
@@ -492,8 +581,18 @@ func TestFormatSnapshotForViewAddsExitHint(t *testing.T) {
 	t.Parallel()
 
 	out := formatSnapshotForView(&session.Snapshot{State: backend.StopState{Exited: true, ExitStatus: 1}}, &viewState{}, false)
-	if !strings.Contains(out, "program exited; press o to inspect captured output, q to quit") {
+	if !strings.Contains(out, "program exited; press o to inspect captured output, any other key to quit") {
 		t.Fatalf("expected exit hint, got %q", out)
+	}
+}
+
+func TestFormatSnapshotForViewExitTTYOmitsPrompt(t *testing.T) {
+	t.Parallel()
+
+	snapshot := &session.Snapshot{State: backend.StopState{Exited: true, ExitStatus: 0}}
+	out := formatSnapshotForView(snapshot, &viewState{outputTTY: true, currentSnapshot: snapshot}, false)
+	if strings.HasSuffix(out, ">") {
+		t.Fatalf("expected no prompt after exit, got %q", out)
 	}
 }
 
@@ -576,7 +675,7 @@ func TestRunCommandLoopKeepsSessionOpenAfterExitForOutputInspection(t *testing.T
 	if !strings.Contains(text, "exit 0") {
 		t.Fatalf("expected exit output, got %q", text)
 	}
-	if !strings.Contains(text, "program exited; press o to inspect captured output, q to quit") {
+	if !strings.Contains(text, "program exited; press o to inspect captured output, any other key to quit") {
 		t.Fatalf("expected exit hint, got %q", text)
 	}
 	if !strings.Contains(text, "OUTPUT-BEGIN\nstdout | done\nOUTPUT-END") {
@@ -587,7 +686,7 @@ func TestRunCommandLoopKeepsSessionOpenAfterExitForOutputInspection(t *testing.T
 	}
 }
 
-func TestRunCommandLoopRejectsSteppingAfterExit(t *testing.T) {
+func TestRunCommandLoopQuitsOnNonOutputInputAfterExit(t *testing.T) {
 	t.Parallel()
 
 	runner := &fakeCommandRunner{
@@ -600,8 +699,8 @@ func TestRunCommandLoopRejectsSteppingAfterExit(t *testing.T) {
 	if len(runner.actions) != 0 {
 		t.Fatalf("expected no debugger actions after exit, got %v", runner.actions)
 	}
-	if !strings.Contains(output.String(), "program already exited") {
-		t.Fatalf("expected exited error, got %q", output.String())
+	if output.String() != "" {
+		t.Fatalf("expected clean quit after exit, got %q", output.String())
 	}
 }
 

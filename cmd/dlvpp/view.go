@@ -161,7 +161,7 @@ func appendExitHint(text string, snapshot *session.Snapshot) string {
 	if text == "" || text[len(text)-1] != '\n' {
 		text += "\n"
 	}
-	return text + "program exited; press o to inspect captured output, q to quit\n"
+	return text + "program exited; press o to inspect captured output, any other key to quit\n"
 }
 
 func setInspection(state *viewState, title string, body string) {
@@ -233,7 +233,7 @@ func formatPlainInspection(snapshot *session.Snapshot, title string, body string
 }
 
 func appendPrompt(text string, state *viewState) string {
-	if state == nil || !state.outputTTY {
+	if state == nil || !state.outputTTY || sessionExited(state) {
 		return text
 	}
 	trimmed := strings.TrimSuffix(text, ">")
