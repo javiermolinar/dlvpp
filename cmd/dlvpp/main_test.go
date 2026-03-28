@@ -169,6 +169,34 @@ func TestRunCommandLoopShowsOutputInspection(t *testing.T) {
 	}
 }
 
+func TestFormatTTYLocalsAddsColorByRole(t *testing.T) {
+	t.Parallel()
+
+	out := formatTTYLocals([]backend.Variable{
+		{Name: "message", Type: "string", Value: "\"hello\""},
+		{Name: "total", Type: "int", Value: "42"},
+		{Name: "ok", Type: "bool", Value: "true"},
+		{Name: "err", Type: "error", Value: "nil"},
+	})
+	for _, want := range []string{ansiCyan + "message" + ansiReset, ansiDim + "(string)" + ansiReset, ansiGreen + "\"hello\"" + ansiReset, ansiMagenta + "42" + ansiReset, ansiYellow + "true" + ansiReset, ansiRed + "nil" + ansiReset} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("expected colored locals output to contain %q, got %q", want, out)
+		}
+	}
+}
+
+func TestFormatTTYOutputDifferentiatesStdoutAndStderr(t *testing.T) {
+	t.Parallel()
+
+	out := formatTTYOutput([]backend.OutputEntry{{Category: backend.OutputCategoryStdout, Text: "hello\n"}, {Category: backend.OutputCategoryStderr, Text: "boom\n"}})
+	if !strings.Contains(out, ansiCyan+"stdout"+ansiReset+" | hello") {
+		t.Fatalf("expected colored stdout output, got %q", out)
+	}
+	if !strings.Contains(out, ansiRed+"stderr"+ansiReset+" | boom") {
+		t.Fatalf("expected colored stderr output, got %q", out)
+	}
+}
+
 func TestRunCommandLoopRejectsLongFormCommands(t *testing.T) {
 	t.Parallel()
 

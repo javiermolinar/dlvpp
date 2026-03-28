@@ -24,6 +24,13 @@ const (
 	ttyBackspace         = 8
 	ttyDelete            = 127
 	commandLoopHelp      = "Commands: n=next, s=step in, l=locals, o=output, :b <location>, q=quit"
+	ansiReset            = "\x1b[0m"
+	ansiDim              = "\x1b[2m"
+	ansiCyan             = "\x1b[36m"
+	ansiGreen            = "\x1b[32m"
+	ansiMagenta          = "\x1b[35m"
+	ansiYellow           = "\x1b[33m"
+	ansiRed              = "\x1b[31m"
 )
 
 var (
@@ -278,7 +285,7 @@ func showLocals(ctx context.Context, output io.Writer, runner commandRunner, sta
 	if err != nil {
 		return fmt.Errorf("locals: %w", err)
 	}
-	body := formatLocals(locals)
+	body := formatLocalsForView(locals, inspectionColorsEnabled(state))
 	setInspection(state, "locals", body)
 	_, _ = fmt.Fprint(output, formatInspectionForView(state.currentSnapshot, state, "locals", body, true))
 	return nil
@@ -296,10 +303,21 @@ func showOutput(ctx context.Context, output io.Writer, runner commandRunner, sta
 	if err != nil {
 		return fmt.Errorf("output: %w", err)
 	}
-	body := formatOutput(entries)
+	body := formatOutputForView(entries, inspectionColorsEnabled(state))
 	setInspection(state, "output", body)
 	_, _ = fmt.Fprint(output, formatInspectionForView(state.currentSnapshot, state, "output", body, true))
 	return nil
+}
+
+func inspectionColorsEnabled(state *viewState) bool {
+	return state != nil && state.sticky && state.outputTTY
+}
+
+func formatLocalsForView(locals []backend.Variable, color bool) string {
+	if !color {
+		return formatLocals(locals)
+	}
+	return formatTTYLocals(locals)
 }
 
 func formatLocals(locals []backend.Variable) string {
@@ -322,6 +340,37 @@ func formatLocals(locals []backend.Variable) string {
 		}
 	}
 	return out.String()
+}
+
+func formatTTYLocals(locals []backend.Variable) string {
+	if len(locals) == 0 {
+		return ansiDim + "(no locals)" + ansiReset + "\n"
+	}
+
+	var out strings.Builder
+	for _, local := range locals {
+		value := local.Value
+		if value == "" {
+			value = "<no value>"
+		}
+		value = truncateText(value, 96)
+		coloredName := ansiCyan + local.Name + ansiReset
+		coloredValue := colorizeLocalValue(value)
+		switch {
+		case local.Type != "":
+			fmt.Fprintf(&out, "%s %s(%s)%s = %s\n", coloredName, ansiDim, local.Type, ansiReset, coloredValue)
+		default:
+			fmt.Fprintf(&out, "%s = %s\n", coloredName, coloredValue)
+		}
+	}
+	return out.String()
+}
+
+func formatOutputForView(entries []backend.OutputEntry, color bool) string {
+	if !color {
+		return formatOutput(entries)
+	}
+	return formatTTYOutput(entries)
 }
 
 func formatOutput(entries []backend.OutputEntry) string {
@@ -350,6 +399,79 @@ func formatOutput(entries []backend.OutputEntry) string {
 		return "(no output)\n"
 	}
 	return out.String()
+}
+
+func formatTTYOutput(entries []backend.OutputEntry) string {
+	if len(entries) == 0 {
+		return ansiDim + "(no output)" + ansiReset + "\n"
+	}
+
+	var out strings.Builder
+	for _, entry := range entries {
+		text := strings.TrimRight(entry.Text, "\n")
+		if text == "" {
+			continue
+		}
+		for _, line := range strings.Split(text, "\n") {
+			switch entry.Category {
+			case backend.OutputCategoryStderr:
+				fmt.Fprintf(&out, "%sstderr%s | %s\n", ansiRed, ansiReset, line)
+			case backend.OutputCategoryStdout:
+				fmt.Fprintf(&out, "%sstdout%s | %s\n", ansiCyan, ansiReset, line)
+			default:
+				fmt.Fprintf(&out, "%s\n", line)
+			}
+		}
+	}
+	if out.Len() == 0 {
+		return ansiDim + "(no output)" + ansiReset + "\n"
+	}
+	return out.String()
+}
+
+func colorizeLocalValue(value string) string {
+	trimmed := strings.TrimSpace(value)
+	switch {
+	case trimmed == "nil" || trimmed == "<nil>":
+		return ansiRed + value + ansiReset
+	case trimmed == "true" || trimmed == "false":
+		return ansiYellow + value + ansiReset
+	case isQuotedValue(trimmed):
+		return ansiGreen + value + ansiReset
+	case isNumericValue(trimmed):
+		return ansiMagenta + value + ansiReset
+	default:
+		return value
+	}
+}
+
+func isQuotedValue(value string) bool {
+	if len(value) < 2 {
+		return false
+	}
+	return (strings.HasPrefix(value, "\"") && strings.HasSuffix(value, "\"")) ||
+		(strings.HasPrefix(value, "`") && strings.HasSuffix(value, "`"))
+}
+
+func isNumericValue(value string) bool {
+	if value == "" {
+		return false
+	}
+	trimmed := strings.TrimLeft(value, "+-")
+	if trimmed == "" {
+		return false
+	}
+	hasDigit := false
+	for _, r := range trimmed {
+		switch {
+		case r >= '0' && r <= '9':
+			hasDigit = true
+		case r == '.' || r == '_' || r == 'x' || r == 'X' || r == 'o' || r == 'O' || r == 'b' || r == 'B' || r == 'e' || r == 'E':
+		default:
+			return false
+		}
+	}
+	return hasDigit
 }
 
 func formatPlainExitOutput(entries []backend.OutputEntry) string {
