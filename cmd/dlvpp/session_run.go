@@ -46,11 +46,12 @@ func runLaunch(target string, sticky bool) error {
 	defer stop()
 
 	return withController(signalCtx, func(startCtx context.Context, controller *session.Controller) error {
-		result, err := controller.StartLaunchSession(startCtx, backend.LaunchRequest{
-			Mode:    backend.LaunchModeDebug,
-			Target:  target,
-			WorkDir: ".",
-		}, backend.BreakpointSpec{Location: defaultBreakpoint})
+		launchReq, err := newLaunchRequest(target)
+		if err != nil {
+			return fmt.Errorf("resolve launch target: %w", err)
+		}
+
+		result, err := controller.StartLaunchSession(startCtx, launchReq, backend.BreakpointSpec{Location: defaultBreakpoint})
 		if err != nil {
 			if errors.Is(err, context.Canceled) {
 				return exitCodeError{code: 130}

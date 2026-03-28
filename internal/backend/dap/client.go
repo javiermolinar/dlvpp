@@ -41,6 +41,7 @@ type Client struct {
 	stopState         *backend.StopState
 	stderr            bytes.Buffer
 	stdout            bytes.Buffer
+	debugOutput       bytes.Buffer
 }
 
 func New() *Client {
@@ -162,6 +163,7 @@ func (c *Client) Close() error {
 	c.stopState = nil
 	c.stderr.Reset()
 	c.stdout.Reset()
+	c.debugOutput.Reset()
 
 	return errors.Join(errs...)
 }
@@ -487,6 +489,7 @@ func (c *Client) requestLocked(ctx context.Context, command string, arguments an
 		return nil, errors.New("dap client is not connected")
 	}
 
+	debugOutputStart := c.debugOutput.Len()
 	seq := c.nextSeqLocked()
 	if err := c.writeRequestLocked(seq, command, arguments); err != nil {
 		return nil, err
@@ -507,10 +510,53 @@ func (c *Client) requestLocked(ctx context.Context, command string, arguments an
 			continue
 		}
 		if !msg.Success {
-			return nil, fmt.Errorf("dap %s failed: %s", command, msg.Message)
+			return nil, c.requestErrorLocked(command, msg, debugOutputStart)
 		}
 		return msg, nil
 	}
+}
+
+func (c *Client) requestErrorLocked(command string, msg *response, debugOutputStart int) error {
+	details := make([]string, 0, 2)
+	if message := strings.TrimSpace(msg.Message); message != "" {
+		details = append(details, message)
+	}
+
+	var body errorResponseBody
+	if len(msg.Body) > 0 && json.Unmarshal(msg.Body, &body) == nil {
+		if formatted := strings.TrimSpace(body.Error.Format); formatted != "" && !containsString(details, formatted) {
+			details = append(details, formatted)
+		}
+	}
+
+	if output := strings.TrimSpace(debugOutputSince(&c.debugOutput, debugOutputStart)); output != "" {
+		details = append(details, output)
+	}
+
+	if len(details) == 0 {
+		return fmt.Errorf("dap %s failed", command)
+	}
+	return fmt.Errorf("dap %s failed: %s", command, strings.Join(details, "\n"))
+}
+
+func debugOutputSince(buf *bytes.Buffer, start int) string {
+	if start < 0 {
+		start = 0
+	}
+	bytes := buf.Bytes()
+	if start >= len(bytes) {
+		return ""
+	}
+	return string(bytes[start:])
+}
+
+func containsString(items []string, want string) bool {
+	for _, item := range items {
+		if item == want {
+			return true
+		}
+	}
+	return false
 }
 
 func (c *Client) waitForStop(ctx context.Context) error {
@@ -570,6 +616,12 @@ func (c *Client) handleEventLocked(msg *response) error {
 			Exited:  true,
 			Reason:  backend.StopReasonExit,
 		}
+	case "output":
+		var body outputEventBody
+		if err := json.Unmarshal(msg.Body, &body); err != nil {
+			return fmt.Errorf("decode output event: %w", err)
+		}
+		_, _ = c.debugOutput.WriteString(body.Output)
 	}
 	return nil
 }

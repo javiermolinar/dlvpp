@@ -34,6 +34,21 @@ type stoppedEventBody struct {
 	ThreadID int    `json:"threadId"`
 }
 
+type outputEventBody struct {
+	Category string `json:"category"`
+	Output   string `json:"output"`
+}
+
+type errorResponseBody struct {
+	Error dapError `json:"error"`
+}
+
+type dapError struct {
+	ID       int    `json:"id"`
+	Format   string `json:"format"`
+	ShowUser bool   `json:"showUser"`
+}
+
 type setBreakpointsBody struct {
 	Breakpoints []dapBreakpoint `json:"breakpoints"`
 }
