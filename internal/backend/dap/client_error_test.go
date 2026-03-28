@@ -53,4 +53,29 @@ func TestHandleEventLockedCapturesOutputEvents(t *testing.T) {
 	if got := client.debugOutput.String(); got != "boom\n" {
 		t.Fatalf("expected captured output, got %q", got)
 	}
+	entries, err := client.Output(nil)
+	if err != nil {
+		t.Fatalf("Output returned error: %v", err)
+	}
+	if len(entries) != 1 || entries[0].Category != "stderr" || entries[0].Text != "boom\n" {
+		t.Fatalf("unexpected output entries: %#v", entries)
+	}
+}
+
+func TestOutputIncludesProcessStdoutAndFiltersDAPBanner(t *testing.T) {
+	t.Parallel()
+
+	client := New()
+	_, _ = client.stdout.WriteString("DAP server listening at: 127.0.0.1:12345\nhello\nworld\n")
+
+	entries, err := client.Output(nil)
+	if err != nil {
+		t.Fatalf("Output returned error: %v", err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("expected one stdout entry, got %#v", entries)
+	}
+	if entries[0].Category != "stdout" || entries[0].Text != "hello\nworld\n" {
+		t.Fatalf("unexpected stdout entry: %#v", entries[0])
+	}
 }

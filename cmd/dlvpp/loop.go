@@ -23,15 +23,19 @@ const (
 	ttyEscape            = 27
 	ttyBackspace         = 8
 	ttyDelete            = 127
-	commandLoopHelp      = "Commands: n=next, s=step in, l=locals, :b <location>, q=quit"
+	commandLoopHelp      = "Commands: n=next, s=step in, l=locals, o=output, :b <location>, q=quit"
 )
 
-var errQuitCommandLoop = errors.New("quit command loop")
+var (
+	errQuitCommandLoop = errors.New("quit command loop")
+	errProgramExited   = errors.New("program already exited")
+)
 
 type commandRunner interface {
 	Do(ctx context.Context, action session.Action) (*session.Snapshot, error)
 	CreateBreakpoint(ctx context.Context, spec backend.BreakpointSpec) (*backend.Breakpoint, error)
 	Locals(ctx context.Context, frame backend.FrameRef) ([]backend.Variable, error)
+	Output(ctx context.Context) ([]backend.OutputEntry, error)
 }
 
 func runCommandLoop(ctx context.Context, input io.Reader, output io.Writer, runner commandRunner, initialSnapshot *session.Snapshot, sticky bool) error {
@@ -111,6 +115,13 @@ func runTTYCommandLoop(ctx context.Context, input *os.File, output io.Writer, ru
 		case 'l':
 			if !commandMode {
 				if done, err := processCommand(ctx, output, runner, state, "l"); done || err != nil {
+					return err
+				}
+				continue
+			}
+		case 'o':
+			if !commandMode {
+				if done, err := processCommand(ctx, output, runner, state, "o"); done || err != nil {
 					return err
 				}
 				continue
@@ -196,6 +207,10 @@ func executeCommandText(ctx context.Context, text string, output io.Writer, runn
 	command := parts[0]
 	args := parts[1:]
 
+	if sessionExited(state) && command != "q" && command != "o" {
+		return errProgramExited
+	}
+
 	switch command {
 	case "q":
 		return errQuitCommandLoop
@@ -205,6 +220,8 @@ func executeCommandText(ctx context.Context, text string, output io.Writer, runn
 		return runDebuggerAction(ctx, output, runner, state, session.ActionStepIn, "step in")
 	case "l":
 		return showLocals(ctx, output, runner, state)
+	case "o":
+		return showOutput(ctx, output, runner, state)
 	case "b":
 		if len(args) == 0 {
 			return errors.New("break requires a location")
@@ -234,10 +251,19 @@ func runDebuggerAction(ctx context.Context, output io.Writer, runner commandRunn
 	clearInspection(state)
 	state.currentSnapshot = snapshot
 	_, _ = fmt.Fprint(output, formatSnapshotForView(snapshot, state, true))
-	if snapshot != nil && snapshot.State.Exited {
-		return errQuitCommandLoop
+	if snapshot != nil && snapshot.State.Exited && state != nil && !state.sticky {
+		entries, err := runner.Output(actionCtx)
+		if err == nil {
+			if block := formatPlainExitOutput(entries); block != "" {
+				_, _ = fmt.Fprint(output, block)
+			}
+		}
 	}
 	return nil
+}
+
+func sessionExited(state *viewState) bool {
+	return state != nil && state.currentSnapshot != nil && state.currentSnapshot.State.Exited
 }
 
 func showLocals(ctx context.Context, output io.Writer, runner commandRunner, state *viewState) error {
@@ -255,6 +281,24 @@ func showLocals(ctx context.Context, output io.Writer, runner commandRunner, sta
 	body := formatLocals(locals)
 	setInspection(state, "locals", body)
 	_, _ = fmt.Fprint(output, formatInspectionForView(state.currentSnapshot, state, "locals", body, true))
+	return nil
+}
+
+func showOutput(ctx context.Context, output io.Writer, runner commandRunner, state *viewState) error {
+	if state == nil || state.currentSnapshot == nil {
+		return errors.New("output: no current session")
+	}
+
+	actionCtx, cancel := context.WithTimeout(ctx, commandActionTimeout)
+	defer cancel()
+
+	entries, err := runner.Output(actionCtx)
+	if err != nil {
+		return fmt.Errorf("output: %w", err)
+	}
+	body := formatOutput(entries)
+	setInspection(state, "output", body)
+	_, _ = fmt.Fprint(output, formatInspectionForView(state.currentSnapshot, state, "output", body, true))
 	return nil
 }
 
@@ -278,6 +322,42 @@ func formatLocals(locals []backend.Variable) string {
 		}
 	}
 	return out.String()
+}
+
+func formatOutput(entries []backend.OutputEntry) string {
+	if len(entries) == 0 {
+		return "(no output)\n"
+	}
+
+	var out strings.Builder
+	for _, entry := range entries {
+		text := strings.TrimRight(entry.Text, "\n")
+		if text == "" {
+			continue
+		}
+		for _, line := range strings.Split(text, "\n") {
+			switch entry.Category {
+			case backend.OutputCategoryStderr:
+				fmt.Fprintf(&out, "stderr | %s\n", line)
+			case backend.OutputCategoryStdout:
+				fmt.Fprintf(&out, "stdout | %s\n", line)
+			default:
+				fmt.Fprintf(&out, "%s\n", line)
+			}
+		}
+	}
+	if out.Len() == 0 {
+		return "(no output)\n"
+	}
+	return out.String()
+}
+
+func formatPlainExitOutput(entries []backend.OutputEntry) string {
+	body := strings.TrimRight(formatOutput(entries), "\n")
+	if body == "" || body == "(no output)" {
+		return ""
+	}
+	return "OUTPUT-BEGIN\n" + body + "\nOUTPUT-END\n"
 }
 
 func truncateText(s string, limit int) string {

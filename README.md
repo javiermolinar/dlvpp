@@ -31,6 +31,7 @@ go run ./cmd/dlvpp attach --plain <pid>
 - **Plain mode (`--plain`, `-p`)**
   - compact, token-friendly output for agent/LLM-driven debugging
   - prints a small non-sticky source window around the current line
+  - automatically prints a delimited captured output block when the program exits
   - omits the runtime command legend to reduce noise; use `dlvpp help` for the command reference
 
 ### Interactive commands
@@ -38,6 +39,7 @@ go run ./cmd/dlvpp attach --plain <pid>
 - `n` — next
 - `s` — step in
 - `l` — show locals for the current frame
+- `o` — show captured program output
 - `:b <location>` — create a breakpoint
 - `q` — quit the session
 

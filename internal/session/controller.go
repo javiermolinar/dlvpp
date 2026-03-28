@@ -85,6 +85,10 @@ func (c *Controller) Locals(ctx context.Context, frame backend.FrameRef) ([]back
 	return c.backend.Locals(ctx, frame)
 }
 
+func (c *Controller) Output(ctx context.Context) ([]backend.OutputEntry, error) {
+	return c.backend.Output(ctx)
+}
+
 func (c *Controller) StartLaunchSession(ctx context.Context, req backend.LaunchRequest, spec backend.BreakpointSpec) (*StartResult, error) {
 	if _, err := c.Launch(ctx, req); err != nil {
 		return nil, err

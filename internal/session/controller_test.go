@@ -277,6 +277,10 @@ func (f *fakeBackend) Locals(context.Context, backend.FrameRef) ([]backend.Varia
 	return nil, backend.ErrUnsupported
 }
 
+func (f *fakeBackend) Output(context.Context) ([]backend.OutputEntry, error) {
+	return nil, backend.ErrUnsupported
+}
+
 func (f *fakeBackend) Goroutines(context.Context) ([]backend.Goroutine, error) {
 	return nil, backend.ErrUnsupported
 }

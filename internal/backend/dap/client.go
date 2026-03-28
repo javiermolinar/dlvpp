@@ -42,6 +42,7 @@ type Client struct {
 	stderr            bytes.Buffer
 	stdout            bytes.Buffer
 	debugOutput       bytes.Buffer
+	targetOutput      []backend.OutputEntry
 }
 
 func New() *Client {
@@ -164,6 +165,7 @@ func (c *Client) Close() error {
 	c.stderr.Reset()
 	c.stdout.Reset()
 	c.debugOutput.Reset()
+	c.targetOutput = nil
 
 	return errors.Join(errs...)
 }
@@ -329,6 +331,21 @@ func (c *Client) Locals(ctx context.Context, frame backend.FrameRef) ([]backend.
 	}
 
 	return locals, nil
+}
+
+func (c *Client) Output(ctx context.Context) ([]backend.OutputEntry, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	entries := make([]backend.OutputEntry, 0, len(c.targetOutput)+2)
+	entries = append(entries, c.targetOutput...)
+	if stdout := sanitizeProcessStdout(c.stdout.String()); stdout != "" {
+		entries = append(entries, backend.OutputEntry{Category: backend.OutputCategoryStdout, Text: stdout})
+	}
+	if stderr := strings.TrimSpace(c.stderr.String()); stderr != "" {
+		entries = append(entries, backend.OutputEntry{Category: backend.OutputCategoryStderr, Text: c.stderr.String()})
+	}
+	return entries, nil
 }
 
 func (c *Client) Goroutines(ctx context.Context) ([]backend.Goroutine, error) {
@@ -622,8 +639,48 @@ func (c *Client) handleEventLocked(msg *response) error {
 			return fmt.Errorf("decode output event: %w", err)
 		}
 		_, _ = c.debugOutput.WriteString(body.Output)
+		if category, ok := mapOutputCategory(body.Category); ok {
+			c.appendTargetOutputLocked(backend.OutputEntry{Category: category, Text: body.Output})
+		}
 	}
 	return nil
+}
+
+func mapOutputCategory(category string) (backend.OutputCategory, bool) {
+	switch strings.ToLower(strings.TrimSpace(category)) {
+	case string(backend.OutputCategoryStdout):
+		return backend.OutputCategoryStdout, true
+	case string(backend.OutputCategoryStderr):
+		return backend.OutputCategoryStderr, true
+	default:
+		return "", false
+	}
+}
+
+func sanitizeProcessStdout(text string) string {
+	if text == "" {
+		return ""
+	}
+	var kept []string
+	for _, line := range strings.Split(text, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "DAP server listening at:") {
+			continue
+		}
+		kept = append(kept, line)
+	}
+	return strings.TrimLeft(strings.Join(kept, "\n"), "\n")
+}
+
+func (c *Client) appendTargetOutputLocked(entry backend.OutputEntry) {
+	if strings.TrimSpace(entry.Text) == "" {
+		return
+	}
+	const maxTargetOutputEntries = 256
+	c.targetOutput = append(c.targetOutput, entry)
+	if len(c.targetOutput) > maxTargetOutputEntries {
+		c.targetOutput = append([]backend.OutputEntry(nil), c.targetOutput[len(c.targetOutput)-maxTargetOutputEntries:]...)
+	}
 }
 
 func (c *Client) nextSeqLocked() int {

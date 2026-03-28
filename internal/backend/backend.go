@@ -28,6 +28,7 @@ type Backend interface {
 
 	Stack(ctx context.Context, goroutineID int, depth int) ([]Frame, error)
 	Locals(ctx context.Context, frame FrameRef) ([]Variable, error)
+	Output(ctx context.Context) ([]OutputEntry, error)
 	Goroutines(ctx context.Context) ([]Goroutine, error)
 	Eval(ctx context.Context, frame FrameRef, expr string) (Value, error)
 
@@ -92,6 +93,19 @@ type Variable struct {
 	Type        string
 	Value       string
 	HasChildren bool
+}
+
+type OutputCategory string
+
+const (
+	OutputCategoryStdout  OutputCategory = "stdout"
+	OutputCategoryStderr  OutputCategory = "stderr"
+	OutputCategoryConsole OutputCategory = "console"
+)
+
+type OutputEntry struct {
+	Category OutputCategory
+	Text     string
 }
 
 type Value struct {

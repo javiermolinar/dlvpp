@@ -52,7 +52,7 @@ func formatSnapshotForView(snapshot *session.Snapshot, state *viewState, clear b
 	if state == nil || state.sticky {
 		return formatStickySnapshotForView(snapshot, state, clear)
 	}
-	return appendPrompt(formatPlainSnapshot(snapshot), state)
+	return appendPrompt(appendExitHint(formatPlainSnapshot(snapshot), snapshot), state)
 }
 
 func formatStickySnapshotForView(snapshot *session.Snapshot, state *viewState, clear bool) string {
@@ -60,7 +60,7 @@ func formatStickySnapshotForView(snapshot *session.Snapshot, state *viewState, c
 		return appendPrompt(session.FormatSnapshot(snapshot), state)
 	}
 
-	base := session.FormatSnapshot(snapshot)
+	base := appendExitHint(session.FormatSnapshot(snapshot), snapshot)
 	if snapshot.State.Exited || snapshot.State.Running || snapshot.Frame == nil {
 		return appendPrompt(maybeClear(state, clear)+base, state)
 	}
@@ -143,6 +143,16 @@ func formatPlainSnapshot(snapshot *session.Snapshot) string {
 	}
 
 	return out.String()
+}
+
+func appendExitHint(text string, snapshot *session.Snapshot) string {
+	if snapshot == nil || !snapshot.State.Exited {
+		return text
+	}
+	if text == "" || text[len(text)-1] != '\n' {
+		text += "\n"
+	}
+	return text + "program exited; press o to inspect captured output, q to quit\n"
 }
 
 func setInspection(state *viewState, title string, body string) {

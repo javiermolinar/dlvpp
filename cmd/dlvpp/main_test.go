@@ -146,6 +146,29 @@ func TestRunCommandLoopShowsLocals(t *testing.T) {
 	}
 }
 
+func TestRunCommandLoopShowsOutputInspection(t *testing.T) {
+	t.Parallel()
+
+	runner := &fakeCommandRunner{
+		output: []backend.OutputEntry{
+			{Category: backend.OutputCategoryStdout, Text: "hello\n"},
+			{Category: backend.OutputCategoryStderr, Text: "boom\n"},
+		},
+		snapshots: []*session.Snapshot{{
+			State: backend.StopState{},
+			Frame: &backend.Frame{Ref: backend.FrameRef{GoroutineID: 1, Index: 2}, Location: backend.SourceLocation{File: "main.go", Line: 12, Function: "main.main"}},
+		}},
+	}
+	var output bytes.Buffer
+	if err := runCommandLoop(context.Background(), bytes.NewBufferString("o\nq\n"), &output, runner, runner.currentSnapshot(), false); err != nil {
+		t.Fatalf("runCommandLoop returned error: %v", err)
+	}
+	text := output.String()
+	if !strings.Contains(text, "output main.main main.go:12") || !strings.Contains(text, "stdout | hello") || !strings.Contains(text, "stderr | boom") {
+		t.Fatalf("expected output inspection, got %q", text)
+	}
+}
+
 func TestRunCommandLoopRejectsLongFormCommands(t *testing.T) {
 	t.Parallel()
 
@@ -355,6 +378,15 @@ func TestFormatSnapshotForViewPlainTTYSuppressesRepeatedHints(t *testing.T) {
 	}
 }
 
+func TestFormatSnapshotForViewAddsExitHint(t *testing.T) {
+	t.Parallel()
+
+	out := formatSnapshotForView(&session.Snapshot{State: backend.StopState{Exited: true, ExitStatus: 1}}, &viewState{}, false)
+	if !strings.Contains(out, "program exited; press o to inspect captured output, q to quit") {
+		t.Fatalf("expected exit hint, got %q", out)
+	}
+}
+
 func TestFormatInspectionForViewUsesBlankCanvasInStickyTTY(t *testing.T) {
 	t.Parallel()
 
@@ -413,21 +445,53 @@ func TestRunDebuggerActionClearsInspection(t *testing.T) {
 	}
 }
 
-func TestRunCommandLoopStopsAfterExitSnapshot(t *testing.T) {
+func TestRunCommandLoopKeepsSessionOpenAfterExitForOutputInspection(t *testing.T) {
+	t.Parallel()
+
+	runner := &fakeCommandRunner{
+		output: []backend.OutputEntry{{Category: backend.OutputCategoryStdout, Text: "done\n"}},
+		snapshots: []*session.Snapshot{
+			{State: backend.StopState{}},
+			{State: backend.StopState{Exited: true, ExitStatus: 0}},
+		},
+	}
+	var output bytes.Buffer
+	if err := runCommandLoop(context.Background(), bytes.NewBufferString("n\no\nq\n"), &output, runner, runner.currentSnapshot(), false); err != nil {
+		t.Fatalf("runCommandLoop returned error: %v", err)
+	}
+	text := output.String()
+	if len(runner.actions) != 1 {
+		t.Fatalf("expected exactly one debugger action, got %v", runner.actions)
+	}
+	if !strings.Contains(text, "exit 0") {
+		t.Fatalf("expected exit output, got %q", text)
+	}
+	if !strings.Contains(text, "program exited; press o to inspect captured output, q to quit") {
+		t.Fatalf("expected exit hint, got %q", text)
+	}
+	if !strings.Contains(text, "OUTPUT-BEGIN\nstdout | done\nOUTPUT-END") {
+		t.Fatalf("expected plain exit output block, got %q", text)
+	}
+	if !strings.Contains(text, "output\nstdout | done") {
+		t.Fatalf("expected output inspection after exit, got %q", text)
+	}
+}
+
+func TestRunCommandLoopRejectsSteppingAfterExit(t *testing.T) {
 	t.Parallel()
 
 	runner := &fakeCommandRunner{
 		snapshots: []*session.Snapshot{{State: backend.StopState{Exited: true, ExitStatus: 0}}},
 	}
 	var output bytes.Buffer
-	if err := runCommandLoop(context.Background(), bytes.NewBufferString("n\nn\n"), &output, runner, runner.currentSnapshot(), false); err != nil {
+	if err := runCommandLoop(context.Background(), bytes.NewBufferString("n\nq\n"), &output, runner, runner.currentSnapshot(), false); err != nil {
 		t.Fatalf("runCommandLoop returned error: %v", err)
 	}
-	if len(runner.actions) != 1 {
-		t.Fatalf("expected command loop to stop after exit, got actions %v", runner.actions)
+	if len(runner.actions) != 0 {
+		t.Fatalf("expected no debugger actions after exit, got %v", runner.actions)
 	}
-	if !strings.Contains(output.String(), "exit 0") {
-		t.Fatalf("expected exit output, got %q", output.String())
+	if !strings.Contains(output.String(), "program already exited") {
+		t.Fatalf("expected exited error, got %q", output.String())
 	}
 }
 
@@ -522,6 +586,7 @@ type fakeCommandRunner struct {
 	snapshotIndex   int
 	breakpoint      *backend.Breakpoint
 	locals          []backend.Variable
+	output          []backend.OutputEntry
 	err             error
 }
 
@@ -562,4 +627,11 @@ func (f *fakeCommandRunner) Locals(_ context.Context, _ backend.FrameRef) ([]bac
 		return nil, f.err
 	}
 	return f.locals, nil
+}
+
+func (f *fakeCommandRunner) Output(_ context.Context) ([]backend.OutputEntry, error) {
+	if f.err != nil {
+		return nil, f.err
+	}
+	return f.output, nil
 }
