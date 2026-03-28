@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -237,28 +238,35 @@ func TestRunCommandLoopStickyShowsHelpLegend(t *testing.T) {
 	}
 }
 
-func TestRunCommandLoopStickyRendersCurrentFunctionWhenEnabled(t *testing.T) {
+func TestRunCommandLoopStickyRendersSlidingWindowWhenEnabled(t *testing.T) {
 	t.Parallel()
 
 	tempDir := t.TempDir()
 	sourcePath := tempDir + "/main.go"
-	source := "package main\n\nfunc main() {\n\tprintln(\"hello\")\n}\n"
-	if err := os.WriteFile(sourcePath, []byte(source), 0o600); err != nil {
+	var source strings.Builder
+	for i := 1; i <= 20; i++ {
+		fmt.Fprintf(&source, "line%02d\n", i)
+	}
+	if err := os.WriteFile(sourcePath, []byte(source.String()), 0o600); err != nil {
 		t.Fatalf("write source fixture: %v", err)
 	}
 
 	runner := &fakeCommandRunner{
 		snapshots: []*session.Snapshot{{
 			State: backend.StopState{},
-			Frame: &backend.Frame{Location: backend.SourceLocation{File: sourcePath, Line: 3, Function: "main.main"}},
+			Frame: &backend.Frame{Location: backend.SourceLocation{File: sourcePath, Line: 10, Function: "main.main"}},
 		}},
 	}
 	var output bytes.Buffer
 	if err := runCommandLoop(context.Background(), bytes.NewBufferString("n\nq\n"), &output, runner, runner.currentSnapshot(), true); err != nil {
 		t.Fatalf("runCommandLoop returned error: %v", err)
 	}
-	if !strings.Contains(output.String(), "println(") {
-		t.Fatalf("expected sticky output, got %q", output.String())
+	text := output.String()
+	if !strings.Contains(text, "line05") || !strings.Contains(text, "line15") {
+		t.Fatalf("expected sticky sliding window around current line, got %q", text)
+	}
+	if strings.Contains(text, "line01") || strings.Contains(text, "line20") {
+		t.Fatalf("expected sticky output to avoid rendering the entire file/function, got %q", text)
 	}
 }
 

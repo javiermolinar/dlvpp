@@ -55,9 +55,13 @@ func formatStickySnapshotForView(snapshot *session.Snapshot, state *viewState, c
 		return appendPrompt(maybeClear(state, clear)+base, state)
 	}
 
-	source, err := sourceview.RenderFunction(snapshot.Frame.Location.File, snapshot.Frame.Location.Line)
-	if err != nil {
-		return appendPrompt(maybeClear(state, clear)+base+fmt.Sprintf("sticky render: %v\n", err), state)
+	source := snapshot.Source
+	if source == "" {
+		var err error
+		source, err = sourceview.RenderWindow(snapshot.Frame.Location.File, snapshot.Frame.Location.Line, sourceContextLines)
+		if err != nil {
+			return appendPrompt(maybeClear(state, clear)+base+fmt.Sprintf("sticky render: %v\n", err), state)
+		}
 	}
 
 	var out strings.Builder

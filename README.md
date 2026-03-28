@@ -25,7 +25,7 @@ go run ./cmd/dlvpp attach --plain <pid>
 
 - **Sticky mode (default)**
   - human-oriented output
-  - re-renders the current function after each stop
+  - re-renders a sliding source window centered on the current line after each stop
   - keeps the interactive command legend visible in the terminal UI
 - **Plain mode (`--plain`, `-p`)**
   - compact, token-friendly output for agent/LLM-driven debugging
