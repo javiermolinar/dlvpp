@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bufio"
 	"bytes"
 	"context"
 	"errors"
@@ -393,6 +392,33 @@ func TestFormatSnapshotForViewStickyTTYUsesTerminalHeight(t *testing.T) {
 	}
 }
 
+func TestFormatSnapshotForViewStickyNonTTYDoesNotUseANSI(t *testing.T) {
+	t.Parallel()
+
+	tempDir := t.TempDir()
+	sourcePath := filepath.Join(tempDir, "main.go")
+	source := "package main\n\nfunc main() {\n\tprintln(\"hello\")\n}\n"
+	if err := os.WriteFile(sourcePath, []byte(source), 0o600); err != nil {
+		t.Fatalf("write source fixture: %v", err)
+	}
+
+	state := &viewState{sticky: true}
+	snapshot := &session.Snapshot{
+		State: backend.StopState{},
+		Frame: &backend.Frame{Location: backend.SourceLocation{File: sourcePath, Line: 3, Function: "main.main"}},
+	}
+	out := formatSnapshotForView(snapshot, state, false)
+	if strings.Contains(out, "\x1b[") {
+		t.Fatalf("expected sticky non-tty output without ANSI escapes, got %q", out)
+	}
+	if !strings.Contains(out, "stopped: main.main at "+sourcePath+":3") {
+		t.Fatalf("expected sticky header, got %q", out)
+	}
+	if !strings.Contains(out, ">   3  func main() {") {
+		t.Fatalf("expected rendered source without ANSI formatting, got %q", out)
+	}
+}
+
 func TestFormatSnapshotForViewPlainTTYSuppressesRepeatedHints(t *testing.T) {
 	t.Parallel()
 
@@ -536,16 +562,19 @@ func TestRunCommandLoopReturnsContextCanceled(t *testing.T) {
 	}
 }
 
-func TestReadCommandReturnsOnContextCancelWhileBlocked(t *testing.T) {
+func TestAsyncLineReaderReturnsOnContextCancelWhileBlocked(t *testing.T) {
 	t.Parallel()
 
 	reader, writer := io.Pipe()
 	defer func() { _ = reader.Close() }()
 
+	asyncReader := newAsyncLineReader(reader)
+	defer asyncReader.Close()
+
 	ctx, cancel := context.WithCancel(context.Background())
 	result := make(chan error, 1)
 	go func() {
-		_, err := readCommand(ctx, bufio.NewReader(reader))
+		_, err := asyncReader.Next(ctx)
 		result <- err
 	}()
 
@@ -559,22 +588,25 @@ func TestReadCommandReturnsOnContextCancelWhileBlocked(t *testing.T) {
 		}
 	case <-time.After(200 * time.Millisecond):
 		_ = writer.Close()
-		t.Fatal("readCommand did not return after context cancel")
+		t.Fatal("async line reader did not return after context cancel")
 	}
 
 	_ = writer.Close()
 }
 
-func TestReadByteReturnsOnContextCancelWhileBlocked(t *testing.T) {
+func TestAsyncByteReaderReturnsOnContextCancelWhileBlocked(t *testing.T) {
 	t.Parallel()
 
 	reader, writer := io.Pipe()
 	defer func() { _ = reader.Close() }()
 
+	asyncReader := newAsyncByteReader(reader)
+	defer asyncReader.Close()
+
 	ctx, cancel := context.WithCancel(context.Background())
 	result := make(chan error, 1)
 	go func() {
-		_, err := readByte(ctx, reader)
+		_, err := asyncReader.Next(ctx)
 		result <- err
 	}()
 
@@ -588,7 +620,7 @@ func TestReadByteReturnsOnContextCancelWhileBlocked(t *testing.T) {
 		}
 	case <-time.After(200 * time.Millisecond):
 		_ = writer.Close()
-		t.Fatal("readByte did not return after context cancel")
+		t.Fatal("async byte reader did not return after context cancel")
 	}
 
 	_ = writer.Close()
@@ -605,6 +637,35 @@ func TestNewlineWriterConvertsLineFeedsForRawTTYOutput(t *testing.T) {
 	if got := output.String(); got != "a\r\nb\r\n" {
 		t.Fatalf("unexpected converted output: %q", got)
 	}
+}
+
+func TestCloseSessionReturnsWrappedError(t *testing.T) {
+	t.Parallel()
+
+	err := closeSession(fakeCloser{err: errors.New("boom")})
+	if err == nil {
+		t.Fatal("expected close error")
+	}
+	if !strings.Contains(err.Error(), "close backend: boom") {
+		t.Fatalf("expected wrapped close error, got %v", err)
+	}
+}
+
+func TestCloseSessionIgnoresClosedNetworkConnection(t *testing.T) {
+	t.Parallel()
+
+	err := closeSession(fakeCloser{err: errors.New("use of closed network connection")})
+	if err != nil {
+		t.Fatalf("expected ignored close error, got %v", err)
+	}
+}
+
+type fakeCloser struct {
+	err error
+}
+
+func (f fakeCloser) Close() error {
+	return f.err
 }
 
 type fakeCommandRunner struct {

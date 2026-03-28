@@ -5,6 +5,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 
@@ -18,6 +19,8 @@ const (
 	plainContextLines     = 1
 	stickyReservedRowsTTY = 5
 )
+
+var ansiEscapePattern = regexp.MustCompile(`\x1b\[[0-9;?]*[ -/]*[@-~]`)
 
 type viewState struct {
 	sticky          bool
@@ -57,10 +60,10 @@ func formatSnapshotForView(snapshot *session.Snapshot, state *viewState, clear b
 
 func formatStickySnapshotForView(snapshot *session.Snapshot, state *viewState, clear bool) string {
 	if snapshot == nil || state == nil || !state.sticky {
-		return appendPrompt(session.FormatSnapshot(snapshot), state)
+		return appendPrompt(stripANSIForNonTTY(session.FormatSnapshot(snapshot), state), state)
 	}
 
-	base := appendExitHint(session.FormatSnapshot(snapshot), snapshot)
+	base := stripANSIForNonTTY(appendExitHint(session.FormatSnapshot(snapshot), snapshot), state)
 	if snapshot.State.Exited || snapshot.State.Running || snapshot.Frame == nil {
 		return appendPrompt(maybeClear(state, clear)+base, state)
 	}
@@ -70,18 +73,21 @@ func formatStickySnapshotForView(snapshot *session.Snapshot, state *viewState, c
 		return appendPrompt(maybeClear(state, clear)+base+fmt.Sprintf("sticky render: %v\n", err), state)
 	}
 
+	path := snapshot.Frame.Location.File
+	if state.outputTTY {
+		path = "\x1b[36m" + path + "\x1b[0m"
+	}
+
 	var out strings.Builder
 	out.WriteString(maybeClear(state, clear))
 	fmt.Fprintf(
 		&out,
-		"stopped: %s at %s%s:%d%s\n",
+		"stopped: %s at %s:%d\n",
 		snapshot.Frame.Location.Function,
-		"\x1b[36m",
-		snapshot.Frame.Location.File,
+		path,
 		snapshot.Frame.Location.Line,
-		"\x1b[0m",
 	)
-	out.WriteString(source)
+	out.WriteString(stripANSIForNonTTY(source, state))
 	if snapshot.SourceError != nil {
 		fmt.Fprintf(&out, "%v\n", snapshot.SourceError)
 	}
@@ -243,6 +249,13 @@ func maybeClear(state *viewState, clear bool) string {
 		return clearScreenANSI
 	}
 	return ""
+}
+
+func stripANSIForNonTTY(text string, state *viewState) string {
+	if state != nil && state.outputTTY {
+		return text
+	}
+	return ansiEscapePattern.ReplaceAllString(text, "")
 }
 
 func displayPath(path string) string {

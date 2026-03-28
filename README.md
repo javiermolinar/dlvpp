@@ -2,39 +2,72 @@
 
 Minimal, opinionated Delve frontend for Go.
 
-## Current commands
+`dlvpp` is a small DAP-backed CLI that launches or attaches to Delve, stops at a sensible default breakpoint, and keeps the debugger loop intentionally compact.
+
+## What works today
+
+- launch a Go package/path with a default breakpoint at `main.main`
+- attach to an existing process by PID
+- step with `next` and `step in`
+- inspect locals for the current frame
+- inspect captured program output (`stdout`/`stderr`) during or after execution
+- create breakpoints interactively with `:b <location>`
+- use either a sticky TTY-oriented view or a compact plain mode for agents/LLMs
+- render a sliding source window around the current line
+- expand sticky mode to the available terminal height in TTY sessions
+- validate launch targets and reject obvious `main.go` file mistakes
+
+## Requirements
+
+- Go
+- [`dlv`](https://github.com/go-delve/delve) available on `PATH`
+
+## Build and run
 
 ```bash
-go run ./cmd/dlvpp version
+make build
+./bin/dlvpp help
+```
+
+You can also run it directly with `go run`:
+
+```bash
+go run ./cmd/dlvpp help
 go run ./cmd/dlvpp launch ./examples/hello
 go run ./cmd/dlvpp launch --plain ./examples/hello
-go run ./cmd/dlvpp launch ./path/to/your/package
 go run ./cmd/dlvpp attach <pid>
 go run ./cmd/dlvpp attach --plain <pid>
 ```
 
-## Current behavior
+## Usage
 
-`launch <package-or-path>` currently:
-- starts a DAP-backed Delve session
-- sets a default breakpoint at `main.main`
-- continues to that breakpoint
-- waits for interactive debugger commands until quit
+```text
+dlvpp version
+dlvpp launch [-p|--plain] <package-or-path>
+dlvpp attach [-p|--plain] <pid>
+```
 
-### Output modes
+### Modes
 
-- **Sticky mode (default)**
-  - human-oriented output
-  - re-renders a sliding source window centered on the current line after each stop
-  - expands that source window to use the available terminal height in TTY mode
-  - keeps the interactive command legend visible in the terminal UI
-- **Plain mode (`--plain`, `-p`)**
-  - compact, token-friendly output for agent/LLM-driven debugging
-  - prints a small non-sticky source window around the current line
-  - automatically prints a delimited captured output block when the program exits
-  - omits the runtime command legend to reduce noise; use `dlvpp help` for the command reference
+#### Sticky mode (default)
 
-### Interactive commands
+- human-oriented terminal view
+- re-renders the current stopped location after each debugger action
+- shows a sliding source window centered on the current line
+- expands that source window to terminal height when output is a TTY
+- keeps the command legend visible in TTY sessions
+- colorizes locals and output inspections in TTY mode
+- lets `Esc` return from locals/output inspection back to the source view
+
+#### Plain mode (`--plain`, `-p`)
+
+- compact, token-friendly output for scripts, agents, and LLMs
+- prints a small non-sticky source window around the current line
+- omits the repeated command legend to reduce noise
+- keeps output easy to parse with stable prefixes like `stop`, `exit`, `stdout |`, and `stderr |`
+- prints a delimited output block on exit when captured program output exists
+
+## Interactive commands
 
 - `n` — next
 - `s` — step in
@@ -43,47 +76,65 @@ go run ./cmd/dlvpp attach --plain <pid>
 - `:b <location>` — create a breakpoint
 - `q` — quit the session
 
+Use `Esc` in sticky TTY mode to leave the current inspection view.
+
 ## Example
 
 ```bash
-go run ./cmd/dlvpp launch ./examples/hello
+go run ./cmd/dlvpp launch --plain ./examples/hello
 ```
 
-## TODO
+Example plain output:
 
-### Done
-- [x] Create the initial Go module and repo layout.
-- [x] Define a transport-neutral backend interface in `internal/backend/backend.go`.
-- [x] Implement a first DAP adapter.
-- [x] Support session lifecycle: `Launch`, `Attach`, `Close`.
-- [x] Add an opinionated default breakpoint at `main.main`.
-- [x] Continue to the breakpoint and print the current stopped location.
-- [x] Render a source window around the current line.
-- [x] Add lightweight Go syntax highlighting with `go/scanner` and `go/token`.
-- [x] Add build, test, lint, and fmt workflows via `Makefile`.
-- [x] Split source rendering into `internal/sourceview/` and DAP wire types into `internal/backend/dap/types.go`.
-- [x] Move session orchestration and snapshot building into `internal/session/` so future REPL/TUI frontends can share one controller.
+```text
+stop main.main examples/hello/main.go:10
+   9 | 
+> 10 | func main() {
+  11 | 	message := "hello delve world"
+```
 
-### Next
-- [ ] Implement stepping commands: `next`, `step in`, `step out`, `pause`.
-- [ ] Add a small interactive REPL instead of waiting only for Enter.
-- [ ] Re-render location and source context after each debugger action.
-- [ ] Implement locals/args display below the source window.
-- [ ] Implement expression evaluation (`p <expr>` style UX).
-- [ ] Add breakpoint listing and clearing.
-- [ ] Add goroutine inspection and selection.
-- [ ] Decide whether to keep the synchronous wrapper model or move to a more event-driven client loop.
-- [ ] Decide whether to add a second backend for Delve headless API or stay DAP-only.
-- [ ] Reassess whether a richer TUI is needed later or if raw terminal output remains enough.
+After stepping through program exit, plain mode can emit a captured output block like:
 
-## Layout
+```text
+OUTPUT-BEGIN
+stdout | hello delve world
+stdout | total: 42
+OUTPUT-END
+```
 
-- `cmd/dlvpp/main.go` — CLI entrypoint
+## Project layout
+
+- `cmd/dlvpp/` — CLI entrypoint, command loop, and terminal/plain views
 - `internal/backend/backend.go` — transport-neutral debugger interface
-- `internal/backend/dap/` — DAP adapter
-- `internal/session/` — shared session controller and snapshot building for CLI/REPL/TUI frontends
+- `internal/backend/dap/` — Delve DAP adapter and wire types
+- `internal/session/` — shared session controller and snapshot building
 - `internal/sourceview/` — source window rendering and Go syntax highlighting
 - `examples/hello/` — sample target program
+
+## Status
+
+### Implemented
+
+- DAP-backed backend abstraction
+- launch, attach, and close lifecycle
+- default bootstrap breakpoint at `main.main`
+- source snapshots and source window rendering
+- sticky terminal rendering with height-aware source windows
+- compact plain output mode
+- interactive command loop
+- `next` and `step in`
+- locals inspection
+- captured output inspection
+- interactive breakpoint creation
+- build/test/lint/fmt workflow via `Makefile`
+
+### Next likely improvements
+
+- `continue`, `step out`, and `pause` commands
+- expression evaluation (`p <expr>` style UX)
+- breakpoint listing and clearing
+- goroutine inspection and selection
+- deciding whether a richer TUI is worth adding later
 
 ## Validation
 
@@ -91,6 +142,6 @@ go run ./cmd/dlvpp launch ./examples/hello
 make lint
 make test
 make build
+go run ./cmd/dlvpp help
 go run ./cmd/dlvpp launch ./examples/hello
 ```
-

@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"dlvpp/internal/backend"
@@ -58,9 +59,11 @@ func runLineCommandLoop(ctx context.Context, input io.Reader, output io.Writer, 
 		_, _ = fmt.Fprintln(output, commandLoopHelp)
 	}
 
-	reader := bufio.NewReader(input)
+	reader := newAsyncLineReader(input)
+	defer reader.Close()
+
 	for {
-		line, err := readCommand(ctx, reader)
+		line, err := reader.Next(ctx)
 		if err != nil {
 			if errors.Is(err, io.EOF) {
 				return nil
@@ -85,11 +88,14 @@ func runTTYCommandLoop(ctx context.Context, input *os.File, output io.Writer, ru
 		_, _ = fmt.Fprintln(output)
 	}()
 
+	reader := newAsyncByteReader(input)
+	defer reader.Close()
+
 	var commandBuf []byte
 	commandMode := false
 
 	for {
-		b, err := readByte(ctx, input)
+		b, err := reader.Next(ctx)
 		if err != nil {
 			return err
 		}
@@ -518,55 +524,124 @@ func formatBreakpoint(bp *backend.Breakpoint, state *viewState) string {
 	return fmt.Sprintf("breakpoint %d set", bp.ID)
 }
 
-func readCommand(ctx context.Context, reader *bufio.Reader) (string, error) {
+type asyncLineReadResult struct {
+	line string
+	err  error
+}
+
+type asyncLineReader struct {
+	requests  chan struct{}
+	results   chan asyncLineReadResult
+	closeOnce sync.Once
+}
+
+func newAsyncLineReader(input io.Reader) *asyncLineReader {
+	reader := &asyncLineReader{
+		requests: make(chan struct{}),
+		results:  make(chan asyncLineReadResult, 1),
+	}
+
+	buffered := bufio.NewReader(input)
+	go func() {
+		defer close(reader.results)
+		for range reader.requests {
+			line, err := buffered.ReadString('\n')
+			reader.results <- asyncLineReadResult{line: line, err: err}
+			if err != nil {
+				return
+			}
+		}
+	}()
+
+	return reader
+}
+
+func (r *asyncLineReader) Next(ctx context.Context) (string, error) {
 	if err := ctx.Err(); err != nil {
 		return "", err
 	}
 
-	result := make(chan struct {
-		line string
-		err  error
-	}, 1)
-	go func() {
-		line, err := reader.ReadString('\n')
-		result <- struct {
-			line string
-			err  error
-		}{line: line, err: err}
-	}()
+	select {
+	case r.requests <- struct{}{}:
+	case <-ctx.Done():
+		return "", ctx.Err()
+	}
 
 	select {
-	case read := <-result:
-		return read.line, read.err
+	case result, ok := <-r.results:
+		if !ok {
+			return "", io.EOF
+		}
+		return result.line, result.err
 	case <-ctx.Done():
 		return "", ctx.Err()
 	}
 }
 
-func readByte(ctx context.Context, input io.Reader) (byte, error) {
+func (r *asyncLineReader) Close() {
+	r.closeOnce.Do(func() {
+		close(r.requests)
+	})
+}
+
+type asyncByteReadResult struct {
+	b   byte
+	err error
+}
+
+type asyncByteReader struct {
+	requests  chan struct{}
+	results   chan asyncByteReadResult
+	closeOnce sync.Once
+}
+
+func newAsyncByteReader(input io.Reader) *asyncByteReader {
+	reader := &asyncByteReader{
+		requests: make(chan struct{}),
+		results:  make(chan asyncByteReadResult, 1),
+	}
+
+	go func() {
+		defer close(reader.results)
+		for range reader.requests {
+			var buf [1]byte
+			_, err := input.Read(buf[:])
+			reader.results <- asyncByteReadResult{b: buf[0], err: err}
+			if err != nil {
+				return
+			}
+		}
+	}()
+
+	return reader
+}
+
+func (r *asyncByteReader) Next(ctx context.Context) (byte, error) {
 	if err := ctx.Err(); err != nil {
 		return 0, err
 	}
 
-	result := make(chan struct {
-		b   byte
-		err error
-	}, 1)
-	go func() {
-		var buf [1]byte
-		_, err := input.Read(buf[:])
-		result <- struct {
-			b   byte
-			err error
-		}{b: buf[0], err: err}
-	}()
-
 	select {
-	case read := <-result:
-		return read.b, read.err
+	case r.requests <- struct{}{}:
 	case <-ctx.Done():
 		return 0, ctx.Err()
 	}
+
+	select {
+	case result, ok := <-r.results:
+		if !ok {
+			return 0, io.EOF
+		}
+		return result.b, result.err
+	case <-ctx.Done():
+		return 0, ctx.Err()
+	}
+}
+
+func (r *asyncByteReader) Close() {
+	r.closeOnce.Do(func() {
+		close(r.requests)
+	})
 }
 
 func isPrintableByte(b byte) bool {

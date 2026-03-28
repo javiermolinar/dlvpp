@@ -83,12 +83,14 @@ func runAttach(pid int, sticky bool) error {
 	})
 }
 
-func withController(signalCtx context.Context, fn func(context.Context, *session.Controller) error) error {
+func withController(signalCtx context.Context, fn func(context.Context, *session.Controller) error) (err error) {
 	startCtx, cancel := context.WithTimeout(signalCtx, bootstrapTimeout)
 	defer cancel()
 
 	controller := session.New(dapbackend.New(), session.Options{SourceContextLines: sourceContextLines})
-	defer closeSession(controller)
+	defer func() {
+		err = errors.Join(err, closeSession(controller))
+	}()
 
 	return fn(startCtx, controller)
 }
@@ -108,9 +110,9 @@ func printSnapshot(w *os.File, snapshot *session.Snapshot, sticky bool) {
 	_, _ = fmt.Fprint(w, formatSnapshotForView(snapshot, state, false))
 }
 
-func closeSession(s interface{ Close() error }) {
+func closeSession(s interface{ Close() error }) error {
 	if err := s.Close(); err != nil && !strings.Contains(err.Error(), "use of closed network connection") {
-		fmt.Fprintf(os.Stderr, "close backend: %v\n", err)
-		os.Exit(1)
+		return fmt.Errorf("close backend: %w", err)
 	}
+	return nil
 }
