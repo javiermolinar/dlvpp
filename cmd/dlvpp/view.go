@@ -27,12 +27,12 @@ type viewState struct {
 	outputTTY       bool
 	outputHeight    int
 	currentSnapshot *session.Snapshot
-	breakpoints     []breakpointLocation
+	breakpoints     []breakpointRecord
 	inspectionTitle string
 	inspectionBody  string
 }
 
-func newViewState(sticky bool, output io.Writer, initialSnapshot *session.Snapshot, initialBreakpoints []breakpointLocation) *viewState {
+func newViewState(sticky bool, output io.Writer, initialSnapshot *session.Snapshot, initialBreakpoints []breakpointRecord) *viewState {
 	outputTTY := false
 	outputHeight := 0
 	if file, ok := output.(*os.File); ok {
@@ -49,7 +49,7 @@ func newViewState(sticky bool, output io.Writer, initialSnapshot *session.Snapsh
 		outputTTY:       outputTTY,
 		outputHeight:    outputHeight,
 		currentSnapshot: initialSnapshot,
-		breakpoints:     append([]breakpointLocation(nil), initialBreakpoints...),
+		breakpoints:     append([]breakpointRecord(nil), initialBreakpoints...),
 	}
 }
 
@@ -236,13 +236,9 @@ func appendPrompt(text string, state *viewState) string {
 	if state == nil || !state.outputTTY {
 		return text
 	}
-	trimmed := strings.TrimSuffix(text, commandLoopHelp+"\n>")
-	trimmed = strings.TrimSuffix(trimmed, ">")
+	trimmed := strings.TrimSuffix(text, ">")
 	if trimmed == "" || trimmed[len(trimmed)-1] != '\n' {
 		trimmed += "\n"
-	}
-	if state.sticky {
-		return trimmed + commandLoopHelp + "\n>"
 	}
 	return trimmed + ">"
 }

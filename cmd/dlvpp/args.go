@@ -22,13 +22,14 @@ Modes:
 
 Interactive commands:
   %s
+  Use h during a session to open the full help screen.
 
 Examples:
   dlvpp version
   dlvpp launch ./examples/hello
   dlvpp launch -p ./path/to/your/package
   dlvpp attach -p 12345
-`, commandLoopHelp)
+`, commandHelpSummary)
 }
 
 func parseLaunchArgs(args []string) (string, bool, error) {

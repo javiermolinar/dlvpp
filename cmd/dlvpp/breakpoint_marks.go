@@ -2,39 +2,50 @@ package main
 
 import "dlvpp/internal/backend"
 
-type breakpointLocation struct {
-	File string
-	Line int
+type breakpointRecord struct {
+	ID       int
+	File     string
+	Line     int
+	Function string
 }
 
-func breakpointLocationFromBackend(bp *backend.Breakpoint) (breakpointLocation, bool) {
-	if bp == nil || bp.Location.File == "" || bp.Location.Line <= 0 {
-		return breakpointLocation{}, false
+func breakpointRecordFromBackend(bp *backend.Breakpoint) (breakpointRecord, bool) {
+	if bp == nil {
+		return breakpointRecord{}, false
 	}
-	return breakpointLocation{File: bp.Location.File, Line: bp.Location.Line}, true
+	if bp.Location.File == "" || bp.Location.Line <= 0 {
+		return breakpointRecord{}, false
+	}
+	return breakpointRecord{
+		ID:       bp.ID,
+		File:     bp.Location.File,
+		Line:     bp.Location.Line,
+		Function: bp.Location.Function,
+	}, true
 }
 
 func rememberBreakpoint(state *viewState, bp *backend.Breakpoint) {
 	if state == nil {
 		return
 	}
-	location, ok := breakpointLocationFromBackend(bp)
+	record, ok := breakpointRecordFromBackend(bp)
 	if !ok {
 		return
 	}
-	for _, existing := range state.breakpoints {
-		if existing == location {
+	for i, existing := range state.breakpoints {
+		if existing.File == record.File && existing.Line == record.Line {
+			state.breakpoints[i] = record
 			return
 		}
 	}
-	state.breakpoints = append(state.breakpoints, location)
+	state.breakpoints = append(state.breakpoints, record)
 }
 
-func initialBreakpointLocations(bps ...*backend.Breakpoint) []breakpointLocation {
-	locations := make([]breakpointLocation, 0, len(bps))
+func initialBreakpointLocations(bps ...*backend.Breakpoint) []breakpointRecord {
+	locations := make([]breakpointRecord, 0, len(bps))
 	for _, bp := range bps {
-		if location, ok := breakpointLocationFromBackend(bp); ok {
-			locations = append(locations, location)
+		if record, ok := breakpointRecordFromBackend(bp); ok {
+			locations = append(locations, record)
 		}
 	}
 	return locations

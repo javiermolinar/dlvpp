@@ -96,7 +96,7 @@ func withController(signalCtx context.Context, fn func(context.Context, *session
 	return fn(startCtx, controller)
 }
 
-func runInteractiveSession(ctx context.Context, runner commandRunner, snapshot *session.Snapshot, sticky bool, initialBreakpoints []breakpointLocation) error {
+func runInteractiveSession(ctx context.Context, runner commandRunner, snapshot *session.Snapshot, sticky bool, initialBreakpoints []breakpointRecord) error {
 	if err := runCommandLoopWithBreakpoints(ctx, os.Stdin, os.Stdout, runner, snapshot, sticky, initialBreakpoints); err != nil {
 		if errors.Is(err, context.Canceled) {
 			return exitCodeError{code: 130}
@@ -106,7 +106,7 @@ func runInteractiveSession(ctx context.Context, runner commandRunner, snapshot *
 	return nil
 }
 
-func printSnapshot(w *os.File, snapshot *session.Snapshot, sticky bool, initialBreakpoints []breakpointLocation) {
+func printSnapshot(w *os.File, snapshot *session.Snapshot, sticky bool, initialBreakpoints []breakpointRecord) {
 	state := newViewState(sticky, w, snapshot, initialBreakpoints)
 	_, _ = fmt.Fprint(w, formatSnapshotForView(snapshot, state, false))
 }

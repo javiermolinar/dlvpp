@@ -24,7 +24,7 @@ const (
 	ttyEscape            = 27
 	ttyBackspace         = 8
 	ttyDelete            = 127
-	commandLoopHelp      = "Commands: c=continue, n=next, s=step in, l=locals, o=output, :b <location>, q=quit"
+	commandHelpSummary   = "c=continue, n=next, s=step in, l=locals, o=output, b=breakpoints, h=help, :b <location>, q=quit"
 	ansiReset            = "\x1b[0m"
 	ansiDim              = "\x1b[2m"
 	ansiCyan             = "\x1b[36m"
@@ -50,7 +50,7 @@ func runCommandLoop(ctx context.Context, input io.Reader, output io.Writer, runn
 	return runCommandLoopWithBreakpoints(ctx, input, output, runner, initialSnapshot, sticky, nil)
 }
 
-func runCommandLoopWithBreakpoints(ctx context.Context, input io.Reader, output io.Writer, runner commandRunner, initialSnapshot *session.Snapshot, sticky bool, initialBreakpoints []breakpointLocation) error {
+func runCommandLoopWithBreakpoints(ctx context.Context, input io.Reader, output io.Writer, runner commandRunner, initialSnapshot *session.Snapshot, sticky bool, initialBreakpoints []breakpointRecord) error {
 	state := newViewState(sticky, output, initialSnapshot, initialBreakpoints)
 	if file, ok := input.(*os.File); ok && term.IsTerminal(int(file.Fd())) {
 		return runTTYCommandLoop(ctx, file, output, runner, state)
@@ -59,10 +59,6 @@ func runCommandLoopWithBreakpoints(ctx context.Context, input io.Reader, output 
 }
 
 func runLineCommandLoop(ctx context.Context, input io.Reader, output io.Writer, runner commandRunner, state *viewState) error {
-	if state != nil && state.sticky {
-		_, _ = fmt.Fprintln(output, commandLoopHelp)
-	}
-
 	reader := newAsyncLineReader(input)
 	defer reader.Close()
 
@@ -114,6 +110,20 @@ func runTTYCommandLoop(ctx context.Context, input *os.File, output io.Writer, ru
 		case 'q':
 			if !commandMode {
 				return nil
+			}
+		case 'h':
+			if !commandMode {
+				if done, err := processCommand(ctx, output, runner, state, "h"); done || err != nil {
+					return err
+				}
+				continue
+			}
+		case 'b':
+			if !commandMode {
+				if done, err := processCommand(ctx, output, runner, state, "b"); done || err != nil {
+					return err
+				}
+				continue
 			}
 		case 'c':
 			if !commandMode {
@@ -220,7 +230,8 @@ func executeCommandText(ctx context.Context, text string, output io.Writer, runn
 	if text == "" {
 		return nil
 	}
-	if strings.HasPrefix(text, ":") {
+	colonCommand := strings.HasPrefix(text, ":")
+	if colonCommand {
 		text = strings.TrimSpace(strings.TrimPrefix(text, ":"))
 	}
 	if text == "" {
@@ -231,24 +242,19 @@ func executeCommandText(ctx context.Context, text string, output io.Writer, runn
 	command := parts[0]
 	args := parts[1:]
 
-	if sessionExited(state) && command != "q" && command != "o" {
+	if sessionExited(state) && command != "q" && command != "o" && command != "h" && command != "b" {
 		return errProgramExited
 	}
 
 	switch command {
 	case "q":
 		return errQuitCommandLoop
-	case "c":
-		return runDebuggerAction(ctx, output, runner, state, session.ActionContinue, "continue")
-	case "n":
-		return runDebuggerAction(ctx, output, runner, state, session.ActionNext, "next")
-	case "s":
-		return runDebuggerAction(ctx, output, runner, state, session.ActionStepIn, "step in")
-	case "l":
-		return showLocals(ctx, output, runner, state)
-	case "o":
-		return showOutput(ctx, output, runner, state)
+	case "h":
+		return showHelp(output, state)
 	case "b":
+		if !colonCommand {
+			return showBreakpoints(output, state)
+		}
 		if len(args) == 0 {
 			return errors.New("break requires a location")
 		}
@@ -267,6 +273,16 @@ func executeCommandText(ctx context.Context, text string, output io.Writer, runn
 		rememberBreakpoint(state, bp)
 		_, _ = fmt.Fprintln(output, formatBreakpoint(bp, state))
 		return nil
+	case "c":
+		return runDebuggerAction(ctx, output, runner, state, session.ActionContinue, "continue")
+	case "n":
+		return runDebuggerAction(ctx, output, runner, state, session.ActionNext, "next")
+	case "s":
+		return runDebuggerAction(ctx, output, runner, state, session.ActionStepIn, "step in")
+	case "l":
+		return showLocals(ctx, output, runner, state)
+	case "o":
+		return showOutput(ctx, output, runner, state)
 	default:
 		return fmt.Errorf("unknown command: %s", command)
 	}
@@ -334,8 +350,79 @@ func showOutput(ctx context.Context, output io.Writer, runner commandRunner, sta
 	return nil
 }
 
+func showHelp(output io.Writer, state *viewState) error {
+	body := formatHelpBody()
+	setInspection(state, "help", body)
+	_, _ = fmt.Fprint(output, formatInspectionForView(currentSnapshot(state), state, "help", body, true))
+	return nil
+}
+
+func showBreakpoints(output io.Writer, state *viewState) error {
+	body := formatBreakpointsForView(state)
+	setInspection(state, "breakpoints", body)
+	_, _ = fmt.Fprint(output, formatInspectionForView(currentSnapshot(state), state, "breakpoints", body, true))
+	return nil
+}
+
+func currentSnapshot(state *viewState) *session.Snapshot {
+	if state == nil {
+		return nil
+	}
+	return state.currentSnapshot
+}
+
 func inspectionColorsEnabled(state *viewState) bool {
 	return state != nil && state.sticky && state.outputTTY
+}
+
+func formatHelpBody() string {
+	return strings.Join([]string{
+		"Navigation",
+		"  c   continue",
+		"  n   next",
+		"  s   step in",
+		"  q   quit",
+		"",
+		"Inspection",
+		"  l   locals",
+		"  o   output",
+		"  b   breakpoints",
+		"  h   help",
+		"",
+		"Breakpoints",
+		"  b   list breakpoints",
+		"  :b 14",
+		"  :b add",
+		"  :b file.go:23",
+	}, "\n") + "\n"
+}
+
+func formatBreakpointsForView(state *viewState) string {
+	if state == nil || len(state.breakpoints) == 0 {
+		return "(no breakpoints)\n"
+	}
+
+	var out strings.Builder
+	for _, bp := range state.breakpoints {
+		marker := "o"
+		if state.outputTTY {
+			marker = ansiRed + "●" + ansiReset
+		}
+		location := displayPath(bp.File)
+		if bp.Line > 0 {
+			location = fmt.Sprintf("%s:%d", location, bp.Line)
+		}
+		function := bp.Function
+		if function == "" {
+			function = "-"
+		}
+		if bp.ID > 0 {
+			fmt.Fprintf(&out, "%s #%d  %s  %s\n", marker, bp.ID, location, function)
+			continue
+		}
+		fmt.Fprintf(&out, "%s %s  %s\n", marker, location, function)
+	}
+	return out.String()
 }
 
 func formatLocalsForView(locals []backend.Variable, color bool) string {
