@@ -265,7 +265,7 @@ func TestFormatSnapshotForViewPlainUsesCompactTokenFriendlyOutput(t *testing.T) 
 	if !strings.Contains(out, expectedHeader) {
 		t.Fatalf("expected compact stop header %q, got %q", expectedHeader, out)
 	}
-	if !strings.Contains(out, "> 4 |") {
+	if !strings.Contains(out, "> 4   |") {
 		t.Fatalf("expected compact source window, got %q", out)
 	}
 	if strings.Contains(out, "\x1b[") {
@@ -420,7 +420,7 @@ func TestFormatSnapshotForViewStickyNonTTYDoesNotUseANSI(t *testing.T) {
 		t.Fatalf("write source fixture: %v", err)
 	}
 
-	state := &viewState{sticky: true}
+	state := &viewState{sticky: true, breakpoints: []breakpointLocation{{File: sourcePath, Line: 4}}}
 	snapshot := &session.Snapshot{
 		State: backend.StopState{},
 		Frame: &backend.Frame{Location: backend.SourceLocation{File: sourcePath, Line: 3, Function: "main.main"}},
@@ -432,8 +432,32 @@ func TestFormatSnapshotForViewStickyNonTTYDoesNotUseANSI(t *testing.T) {
 	if !strings.Contains(out, "stopped: main.main at "+sourcePath+":3") {
 		t.Fatalf("expected sticky header, got %q", out)
 	}
-	if !strings.Contains(out, ">   3  func main() {") {
+	if !strings.Contains(out, ">   3   func main() {") {
 		t.Fatalf("expected rendered source without ANSI formatting, got %q", out)
+	}
+	if !strings.Contains(out, "    4 ● \tprintln(\"hello\")") {
+		t.Fatalf("expected sticky breakpoint marker, got %q", out)
+	}
+}
+
+func TestFormatSnapshotForViewPlainMarksBreakpointColumn(t *testing.T) {
+	t.Parallel()
+
+	tempDir := t.TempDir()
+	sourcePath := filepath.Join(tempDir, "main.go")
+	source := "package main\n\nfunc main() {\n\tprintln(\"hello\")\n}\n"
+	if err := os.WriteFile(sourcePath, []byte(source), 0o600); err != nil {
+		t.Fatalf("write source fixture: %v", err)
+	}
+
+	state := &viewState{breakpoints: []breakpointLocation{{File: sourcePath, Line: 4}}}
+	snapshot := &session.Snapshot{
+		State: backend.StopState{},
+		Frame: &backend.Frame{Location: backend.SourceLocation{File: sourcePath, Line: 3, Function: "main.main"}},
+	}
+	out := formatSnapshotForView(snapshot, state, false)
+	if !strings.Contains(out, " 4 o | \tprintln(\"hello\")") {
+		t.Fatalf("expected plain breakpoint marker, got %q", out)
 	}
 }
 

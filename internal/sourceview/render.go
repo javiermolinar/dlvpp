@@ -19,9 +19,14 @@ const (
 	ansiBlue    = "\x1b[34m"
 	ansiMagenta = "\x1b[35m"
 	ansiGray    = "\x1b[90m"
+	ansiRed     = "\x1b[31m"
 )
 
 func RenderWindow(path string, line int, contextLines int) (string, error) {
+	return RenderWindowWithBreakpoints(path, line, contextLines, nil)
+}
+
+func RenderWindowWithBreakpoints(path string, line int, contextLines int, breakpoints map[int]struct{}) (string, error) {
 	renderedLines, err := renderedLines(path)
 	if err != nil {
 		return "", err
@@ -29,10 +34,14 @@ func RenderWindow(path string, line int, contextLines int) (string, error) {
 
 	start := max(1, line-contextLines)
 	end := min(len(renderedLines), line+contextLines)
-	return formatRange(renderedLines, line, start, end)
+	return formatRange(renderedLines, line, start, end, breakpoints)
 }
 
 func RenderRange(path string, line int, start int, end int) (string, error) {
+	return RenderRangeWithBreakpoints(path, line, start, end, nil)
+}
+
+func RenderRangeWithBreakpoints(path string, line int, start int, end int, breakpoints map[int]struct{}) (string, error) {
 	renderedLines, err := renderedLines(path)
 	if err != nil {
 		return "", err
@@ -47,7 +56,7 @@ func RenderRange(path string, line int, start int, end int) (string, error) {
 
 	start = max(1, start)
 	end = min(len(renderedLines), end)
-	return formatRange(renderedLines, line, start, end)
+	return formatRange(renderedLines, line, start, end, breakpoints)
 }
 
 func RenderFunction(path string, line int) (string, error) {
@@ -77,7 +86,7 @@ func renderedLines(path string) ([]string, error) {
 	return lines, nil
 }
 
-func formatRange(lines []string, currentLine int, start int, end int) (string, error) {
+func formatRange(lines []string, currentLine int, start int, end int, breakpoints map[int]struct{}) (string, error) {
 	if currentLine <= 0 || currentLine > len(lines) {
 		return "", errorsf("source line out of range: %d", currentLine)
 	}
@@ -95,14 +104,22 @@ func formatRange(lines []string, currentLine int, start int, end int) (string, e
 	out.WriteString("\n")
 	for i := start; i <= end; i++ {
 		text := lines[i-1]
+		bpMarker := formatBreakpointMarker(i, breakpoints)
 		if i == currentLine {
-			fmt.Fprintf(&out, "%s%s>%4d%s  %s\n", ansiYellow, ansiDim, i, ansiReset, text)
+			fmt.Fprintf(&out, "%s%s>%4d%s %s %s\n", ansiYellow, ansiDim, i, ansiReset, bpMarker, text)
 			continue
 		}
-		fmt.Fprintf(&out, "%s %4d%s  %s\n", ansiDim, i, ansiReset, text)
+		fmt.Fprintf(&out, "%s %4d%s %s %s\n", ansiDim, i, ansiReset, bpMarker, text)
 	}
 	out.WriteString("\n")
 	return out.String(), nil
+}
+
+func formatBreakpointMarker(line int, breakpoints map[int]struct{}) string {
+	if _, ok := breakpoints[line]; ok {
+		return ansiRed + "●" + ansiReset
+	}
+	return " "
 }
 
 func enclosingFunctionRange(path string, line int) (int, int, error) {

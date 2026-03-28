@@ -59,8 +59,9 @@ func runLaunch(target string, sticky bool) error {
 			return fmt.Errorf("launch failed: %w", err)
 		}
 
-		printSnapshot(os.Stdout, result.Snapshot, sticky)
-		return runInteractiveSession(signalCtx, controller, result.Snapshot, sticky)
+		initialBreakpoints := initialBreakpointLocations(result.Breakpoint)
+		printSnapshot(os.Stdout, result.Snapshot, sticky, initialBreakpoints)
+		return runInteractiveSession(signalCtx, controller, result.Snapshot, sticky, initialBreakpoints)
 	})
 }
 
@@ -78,8 +79,8 @@ func runAttach(pid int, sticky bool) error {
 		}
 
 		fmt.Printf("attach OK for pid %d\n", pid)
-		printSnapshot(os.Stdout, result.Snapshot, sticky)
-		return runInteractiveSession(signalCtx, controller, result.Snapshot, sticky)
+		printSnapshot(os.Stdout, result.Snapshot, sticky, nil)
+		return runInteractiveSession(signalCtx, controller, result.Snapshot, sticky, nil)
 	})
 }
 
@@ -95,8 +96,8 @@ func withController(signalCtx context.Context, fn func(context.Context, *session
 	return fn(startCtx, controller)
 }
 
-func runInteractiveSession(ctx context.Context, runner commandRunner, snapshot *session.Snapshot, sticky bool) error {
-	if err := runCommandLoop(ctx, os.Stdin, os.Stdout, runner, snapshot, sticky); err != nil {
+func runInteractiveSession(ctx context.Context, runner commandRunner, snapshot *session.Snapshot, sticky bool, initialBreakpoints []breakpointLocation) error {
+	if err := runCommandLoopWithBreakpoints(ctx, os.Stdin, os.Stdout, runner, snapshot, sticky, initialBreakpoints); err != nil {
 		if errors.Is(err, context.Canceled) {
 			return exitCodeError{code: 130}
 		}
@@ -105,8 +106,8 @@ func runInteractiveSession(ctx context.Context, runner commandRunner, snapshot *
 	return nil
 }
 
-func printSnapshot(w *os.File, snapshot *session.Snapshot, sticky bool) {
-	state := newViewState(sticky, w, snapshot)
+func printSnapshot(w *os.File, snapshot *session.Snapshot, sticky bool, initialBreakpoints []breakpointLocation) {
+	state := newViewState(sticky, w, snapshot, initialBreakpoints)
 	_, _ = fmt.Fprint(w, formatSnapshotForView(snapshot, state, false))
 }
 

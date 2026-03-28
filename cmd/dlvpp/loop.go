@@ -47,7 +47,11 @@ type commandRunner interface {
 }
 
 func runCommandLoop(ctx context.Context, input io.Reader, output io.Writer, runner commandRunner, initialSnapshot *session.Snapshot, sticky bool) error {
-	state := newViewState(sticky, output, initialSnapshot)
+	return runCommandLoopWithBreakpoints(ctx, input, output, runner, initialSnapshot, sticky, nil)
+}
+
+func runCommandLoopWithBreakpoints(ctx context.Context, input io.Reader, output io.Writer, runner commandRunner, initialSnapshot *session.Snapshot, sticky bool, initialBreakpoints []breakpointLocation) error {
+	state := newViewState(sticky, output, initialSnapshot, initialBreakpoints)
 	if file, ok := input.(*os.File); ok && term.IsTerminal(int(file.Fd())) {
 		return runTTYCommandLoop(ctx, file, output, runner, state)
 	}
@@ -248,13 +252,19 @@ func executeCommandText(ctx context.Context, text string, output io.Writer, runn
 		if len(args) == 0 {
 			return errors.New("break requires a location")
 		}
-		actionCtx, cancel := context.WithTimeout(ctx, commandActionTimeout)
-		defer cancel()
-
-		bp, err := runner.CreateBreakpoint(actionCtx, backend.BreakpointSpec{Location: strings.Join(args, " ")})
+		location, err := resolveBreakpointLocation(strings.Join(args, " "), breakpointResolveContext{Snapshot: state.currentSnapshot})
 		if err != nil {
 			return fmt.Errorf("break: %w", err)
 		}
+
+		actionCtx, cancel := context.WithTimeout(ctx, commandActionTimeout)
+		defer cancel()
+
+		bp, err := runner.CreateBreakpoint(actionCtx, backend.BreakpointSpec{Location: location})
+		if err != nil {
+			return fmt.Errorf("break: %w", err)
+		}
+		rememberBreakpoint(state, bp)
 		_, _ = fmt.Fprintln(output, formatBreakpoint(bp, state))
 		return nil
 	default:

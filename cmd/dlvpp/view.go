@@ -27,11 +27,12 @@ type viewState struct {
 	outputTTY       bool
 	outputHeight    int
 	currentSnapshot *session.Snapshot
+	breakpoints     []breakpointLocation
 	inspectionTitle string
 	inspectionBody  string
 }
 
-func newViewState(sticky bool, output io.Writer, initialSnapshot *session.Snapshot) *viewState {
+func newViewState(sticky bool, output io.Writer, initialSnapshot *session.Snapshot, initialBreakpoints []breakpointLocation) *viewState {
 	outputTTY := false
 	outputHeight := 0
 	if file, ok := output.(*os.File); ok {
@@ -48,6 +49,7 @@ func newViewState(sticky bool, output io.Writer, initialSnapshot *session.Snapsh
 		outputTTY:       outputTTY,
 		outputHeight:    outputHeight,
 		currentSnapshot: initialSnapshot,
+		breakpoints:     append([]breakpointLocation(nil), initialBreakpoints...),
 	}
 }
 
@@ -55,7 +57,7 @@ func formatSnapshotForView(snapshot *session.Snapshot, state *viewState, clear b
 	if state == nil || state.sticky {
 		return formatStickySnapshotForView(snapshot, state, clear)
 	}
-	return appendPrompt(appendExitHint(formatPlainSnapshot(snapshot), snapshot), state)
+	return appendPrompt(appendExitHint(formatPlainSnapshot(snapshot, state), snapshot), state)
 }
 
 func formatStickySnapshotForView(snapshot *session.Snapshot, state *viewState, clear bool) string {
@@ -98,21 +100,22 @@ func renderStickySource(snapshot *session.Snapshot, state *viewState) (string, e
 	if snapshot == nil || snapshot.Frame == nil {
 		return "", nil
 	}
+	breakpoints := breakpointLinesForPath(state, snapshot.Frame.Location.File)
 	if state != nil && state.outputTTY && state.outputHeight > stickyReservedRowsTTY {
 		visibleLines := max(1, state.outputHeight-stickyReservedRowsTTY)
 		before := (visibleLines - 1) / 2
 		after := visibleLines - before - 1
 		start := max(1, snapshot.Frame.Location.Line-before)
 		end := snapshot.Frame.Location.Line + after
-		return sourceview.RenderRange(snapshot.Frame.Location.File, snapshot.Frame.Location.Line, start, end)
+		return sourceview.RenderRangeWithBreakpoints(snapshot.Frame.Location.File, snapshot.Frame.Location.Line, start, end, breakpoints)
 	}
-	if snapshot.Source != "" {
+	if snapshot.Source != "" && len(breakpoints) == 0 {
 		return snapshot.Source, nil
 	}
-	return sourceview.RenderWindow(snapshot.Frame.Location.File, snapshot.Frame.Location.Line, sourceContextLines)
+	return sourceview.RenderWindowWithBreakpoints(snapshot.Frame.Location.File, snapshot.Frame.Location.Line, sourceContextLines, breakpoints)
 }
 
-func formatPlainSnapshot(snapshot *session.Snapshot) string {
+func formatPlainSnapshot(snapshot *session.Snapshot, state *viewState) string {
 	if snapshot == nil {
 		return ""
 	}
@@ -137,7 +140,7 @@ func formatPlainSnapshot(snapshot *session.Snapshot) string {
 			displayPath(snapshot.Frame.Location.File),
 			snapshot.Frame.Location.Line,
 		)
-		source, err := renderPlainWindow(snapshot.Frame.Location.File, snapshot.Frame.Location.Line, plainContextLines)
+		source, err := renderPlainWindow(snapshot.Frame.Location.File, snapshot.Frame.Location.Line, plainContextLines, breakpointLinesForPath(state, snapshot.Frame.Location.File))
 		if err != nil {
 			fmt.Fprintf(&out, "err source: %v\n", err)
 			break
@@ -276,7 +279,20 @@ func displayPath(path string) string {
 	return filepath.Clean(rel)
 }
 
-func renderPlainWindow(path string, line int, contextLines int) (string, error) {
+func breakpointLinesForPath(state *viewState, path string) map[int]struct{} {
+	lines := make(map[int]struct{})
+	if state == nil || path == "" {
+		return lines
+	}
+	for _, bp := range state.breakpoints {
+		if bp.File == path && bp.Line > 0 {
+			lines[bp.Line] = struct{}{}
+		}
+	}
+	return lines
+}
+
+func renderPlainWindow(path string, line int, contextLines int, breakpoints map[int]struct{}) (string, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return "", fmt.Errorf("read source: %w", err)
@@ -297,7 +313,11 @@ func renderPlainWindow(path string, line int, contextLines int) (string, error) 
 		if i == line {
 			marker = ">"
 		}
-		fmt.Fprintf(&out, "%s %*d | %s\n", marker, width, i, lines[i-1])
+		bpMarker := " "
+		if _, ok := breakpoints[i]; ok {
+			bpMarker = "o"
+		}
+		fmt.Fprintf(&out, "%s %*d %s | %s\n", marker, width, i, bpMarker, lines[i-1])
 	}
 	return out.String(), nil
 }
