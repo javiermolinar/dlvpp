@@ -1,46 +1,65 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"io"
+	"log/slog"
+	"strings"
 )
 
-type logLevel int
-
-const (
-	logLevelSilent logLevel = iota
-	logLevelInfo
-	logLevelDebug
-)
-
-type logger interface {
-	Infof(format string, args ...any)
-	Debugf(format string, args ...any)
-}
-
-type writerLogger struct {
-	level  logLevel
-	writer io.Writer
-}
-
-func newLogger(verbose bool, writer io.Writer) logger {
-	level := logLevelSilent
+func newCommandLogger(verbose bool, writer io.Writer) *slog.Logger {
+	level := slog.LevelError + 1
 	if verbose {
-		level = logLevelDebug
+		level = slog.LevelDebug
 	}
-	return writerLogger{level: level, writer: writer}
+	return slog.New(newPlainHandler(writer, level))
 }
 
-func (l writerLogger) Infof(format string, args ...any) {
-	if l.level < logLevelInfo {
-		return
-	}
-	_, _ = fmt.Fprintf(l.writer, format+"\n", args...)
+type plainHandler struct {
+	writer io.Writer
+	level  slog.Level
+	attrs  []slog.Attr
+	groups []string
 }
 
-func (l writerLogger) Debugf(format string, args ...any) {
-	if l.level < logLevelDebug {
-		return
+func newPlainHandler(writer io.Writer, level slog.Level) slog.Handler {
+	return &plainHandler{writer: writer, level: level}
+}
+
+func (h *plainHandler) Enabled(_ context.Context, level slog.Level) bool {
+	return level >= h.level
+}
+
+func (h *plainHandler) Handle(_ context.Context, record slog.Record) error {
+	var out strings.Builder
+	out.WriteString(record.Message)
+
+	attrs := append([]slog.Attr(nil), h.attrs...)
+	record.Attrs(func(attr slog.Attr) bool {
+		attrs = append(attrs, attr)
+		return true
+	})
+	for _, attr := range attrs {
+		key := attr.Key
+		if len(h.groups) > 0 {
+			key = strings.Join(append(append([]string(nil), h.groups...), key), ".")
+		}
+		fmt.Fprintf(&out, " %s=%v", key, attr.Value.Any())
 	}
-	_, _ = fmt.Fprintf(l.writer, format+"\n", args...)
+	out.WriteByte('\n')
+	_, err := io.WriteString(h.writer, out.String())
+	return err
+}
+
+func (h *plainHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
+	clone := *h
+	clone.attrs = append(append([]slog.Attr(nil), h.attrs...), attrs...)
+	return &clone
+}
+
+func (h *plainHandler) WithGroup(name string) slog.Handler {
+	clone := *h
+	clone.groups = append(append([]string(nil), h.groups...), name)
+	return &clone
 }

@@ -40,7 +40,7 @@ func run(args []string) error {
 			usage(os.Stderr)
 			return exitCodeError{code: 2, err: err}
 		}
-		return runLaunch(target, sticky, verbose)
+		return runLaunch(target, sticky, newCommandLogger(verbose, os.Stdout))
 	case "test":
 		target, selector, sticky, verbose, err := parseTestArgs(args[1:])
 		if err != nil {
@@ -51,7 +51,7 @@ func run(args []string) error {
 			usage(os.Stderr)
 			return exitCodeError{code: 2, err: err}
 		}
-		return runTest(target, selector, sticky, verbose)
+		return runTest(target, selector, sticky, newCommandLogger(verbose, os.Stdout))
 	case "attach":
 		pid, sticky, verbose, err := parseAttachArgs(args[1:])
 		if err != nil {
@@ -62,7 +62,7 @@ func run(args []string) error {
 			usage(os.Stderr)
 			return exitCodeError{code: 2, err: err}
 		}
-		return runAttach(pid, sticky, verbose)
+		return runAttach(pid, sticky, newCommandLogger(verbose, os.Stdout))
 	case "help", "-h", "--help":
 		usage(os.Stdout)
 		return nil
