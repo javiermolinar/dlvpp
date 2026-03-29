@@ -9,6 +9,7 @@ func add(a, b int) int {
 
 func main() {
 	message := "hello delve world"
+	// breakpoint
 	total := add(20, 22)
 	fmt.Println(message)
 	fmt.Println("total:", total)

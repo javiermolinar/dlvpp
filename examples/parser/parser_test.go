@@ -14,6 +14,7 @@ func TestParseInt(t *testing.T) {
 	})
 
 	t.Run("invalid", func(t *testing.T) {
+		//breakpoint
 		_, err := ParseInt("abc")
 		if err == nil {
 			t.Fatal("expected parse error")

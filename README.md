@@ -13,6 +13,7 @@ Minimal, opinionated Delve frontend for Go.
 - inspect locals for the current frame
 - inspect captured program output (`stdout`/`stderr`) during or after execution
 - create breakpoints interactively with `:b <location>`
+- auto-load code comment breakpoints such as `//breakpoint` and `// breakpoint`
 - use either a sticky TTY-oriented view or a compact plain mode for agents/LLMs
 - render a sliding source window around the current line
 - expand sticky mode to the available terminal height in TTY sessions

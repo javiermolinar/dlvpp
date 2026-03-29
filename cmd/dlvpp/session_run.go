@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -51,7 +52,7 @@ func runLaunch(target string, sticky bool) error {
 			return fmt.Errorf("resolve launch target: %w", err)
 		}
 
-		result, err := controller.StartLaunchSession(startCtx, launchReq, backend.BreakpointSpec{Location: defaultBreakpoint})
+		snapshot, initialBreakpoints, report, err := startLaunchWithAutoBreakpoints(startCtx, os.Stdout, controller, launchReq, target, false, []backend.BreakpointSpec{{Location: defaultBreakpoint}})
 		if err != nil {
 			if errors.Is(err, context.Canceled) {
 				return exitCodeError{code: 130}
@@ -59,9 +60,9 @@ func runLaunch(target string, sticky bool) error {
 			return fmt.Errorf("launch failed: %w", err)
 		}
 
-		initialBreakpoints := initialBreakpointLocations(result.Breakpoint)
-		printSnapshot(os.Stdout, result.Snapshot, sticky, initialBreakpoints)
-		return runInteractiveSession(signalCtx, controller, result.Snapshot, sticky, initialBreakpoints)
+		printAutoBreakpointsSummary(os.Stdout, report)
+		printSnapshot(os.Stdout, snapshot, sticky, initialBreakpoints)
+		return runInteractiveSession(signalCtx, controller, snapshot, sticky, initialBreakpoints)
 	})
 }
 
@@ -76,7 +77,7 @@ func runTest(target string, selector string, sticky bool) error {
 		}
 
 		breakpoint := topLevelTestName(selector)
-		result, err := controller.StartLaunchSession(startCtx, launchReq, backend.BreakpointSpec{Location: breakpoint})
+		snapshot, initialBreakpoints, report, err := startLaunchWithAutoBreakpoints(startCtx, os.Stdout, controller, launchReq, target, true, []backend.BreakpointSpec{{Location: breakpoint}})
 		if err != nil {
 			if errors.Is(err, context.Canceled) {
 				return exitCodeError{code: 130}
@@ -84,10 +85,117 @@ func runTest(target string, selector string, sticky bool) error {
 			return fmt.Errorf("test launch failed: %w", err)
 		}
 
-		initialBreakpoints := initialBreakpointLocations(result.Breakpoint)
-		printSnapshot(os.Stdout, result.Snapshot, sticky, initialBreakpoints)
-		return runInteractiveSession(signalCtx, controller, result.Snapshot, sticky, initialBreakpoints)
+		printAutoBreakpointsSummary(os.Stdout, report)
+		printSnapshot(os.Stdout, snapshot, sticky, initialBreakpoints)
+		return runInteractiveSession(signalCtx, controller, snapshot, sticky, initialBreakpoints)
 	})
+}
+
+type launchAutoBreakpointReport struct {
+	scope             string
+	discoveryDuration time.Duration
+	launchDuration    time.Duration
+	loaded            []breakpointRecord
+	skipped           []string
+}
+
+func startLaunchWithAutoBreakpoints(ctx context.Context, progress io.Writer, controller *session.Controller, req backend.LaunchRequest, target string, includeTests bool, bootstrap []backend.BreakpointSpec) (*session.Snapshot, []breakpointRecord, launchAutoBreakpointReport, error) {
+	type discoveryResult struct {
+		scope    string
+		specs    []backend.BreakpointSpec
+		duration time.Duration
+		err      error
+	}
+
+	discovery := make(chan discoveryResult, 1)
+	if includeTests {
+		_, _ = fmt.Fprintln(progress, "startup: scanning target package for auto breakpoints...")
+	} else {
+		_, _ = fmt.Fprintln(progress, "startup: scanning module for auto breakpoints...")
+	}
+	go func() {
+		started := time.Now()
+		index := newSourceIndex()
+		var (
+			scope string
+			specs []backend.BreakpointSpec
+			err   error
+		)
+		if includeTests {
+			scope = "target package"
+			specs, err = discoverCommentBreakpoints(ctx, index, target, true)
+		} else {
+			scope = "module"
+			specs, err = discoverCommentBreakpointsInModule(ctx, index, target, false)
+		}
+		if err != nil {
+			discovery <- discoveryResult{scope: scope, duration: time.Since(started), err: fmt.Errorf("discover comment breakpoints: %w", err)}
+			return
+		}
+		discovery <- discoveryResult{scope: scope, specs: specs, duration: time.Since(started)}
+	}()
+
+	_, _ = fmt.Fprintln(progress, "startup: starting delve dap...")
+	_, _ = fmt.Fprintln(progress, "startup: launching target...")
+	launchStarted := time.Now()
+	if _, err := controller.Launch(ctx, req); err != nil {
+		return nil, nil, launchAutoBreakpointReport{}, err
+	}
+	launchDuration := time.Since(launchStarted)
+
+	_, _ = fmt.Fprintln(progress, "startup: waiting for first stop...")
+	var discovered discoveryResult
+	select {
+	case result := <-discovery:
+		if result.err != nil {
+			return nil, nil, launchAutoBreakpointReport{}, result.err
+		}
+		discovered = result
+	case <-ctx.Done():
+		return nil, nil, launchAutoBreakpointReport{}, ctx.Err()
+	}
+
+	report := launchAutoBreakpointReport{
+		scope:             discovered.scope,
+		discoveryDuration: discovered.duration,
+		launchDuration:    launchDuration,
+	}
+
+	discoveredRecords := make([]breakpointRecord, 0, len(discovered.specs))
+	discoveredLocations := make(map[string]struct{}, len(discovered.specs))
+	for _, spec := range discovered.specs {
+		discoveredLocations[spec.Location] = struct{}{}
+		bp, err := controller.CreateBreakpoint(ctx, spec)
+		if err != nil {
+			report.skipped = append(report.skipped, fmt.Sprintf("%s (%v)", displayPathFromLocation(spec.Location), err))
+			continue
+		}
+		if record, ok := breakpointRecordFromBackend(bp); ok {
+			discoveredRecords = append(discoveredRecords, record)
+		}
+	}
+	report.loaded = append([]breakpointRecord(nil), discoveredRecords...)
+
+	bootstrapRecords := make([]breakpointRecord, 0, len(bootstrap))
+	for _, spec := range dedupeBreakpointSpecs(bootstrap) {
+		if _, ok := discoveredLocations[spec.Location]; ok {
+			continue
+		}
+		bp, err := controller.CreateBreakpoint(ctx, spec)
+		if err != nil {
+			return nil, nil, launchAutoBreakpointReport{}, err
+		}
+		if record, ok := breakpointRecordFromBackend(bp); ok {
+			bootstrapRecords = append(bootstrapRecords, record)
+		}
+	}
+
+	snapshot, err := controller.Continue(ctx)
+	if err != nil {
+		return nil, nil, launchAutoBreakpointReport{}, err
+	}
+	allRecords := append(append([]breakpointRecord(nil), discoveredRecords...), bootstrapRecords...)
+	return snapshot, allRecords, report, nil
 }
 
 func runAttach(pid int, sticky bool) error {
@@ -129,6 +237,36 @@ func runInteractiveSession(ctx context.Context, runner commandRunner, snapshot *
 		return err
 	}
 	return nil
+}
+
+func printAutoBreakpointsSummary(w *os.File, report launchAutoBreakpointReport) {
+	_, _ = fmt.Fprintf(w, "startup: dap=%s source-scan=%s\n", report.launchDuration.Round(time.Millisecond), report.discoveryDuration.Round(time.Millisecond))
+	if len(report.loaded) == 0 {
+		_, _ = fmt.Fprintf(w, "auto breakpoints (%s): none loaded\n", report.scope)
+	} else {
+		_, _ = fmt.Fprintf(w, "auto breakpoints (%s): %d loaded\n", report.scope, len(report.loaded))
+		for _, record := range report.loaded {
+			if record.Function != "" {
+				_, _ = fmt.Fprintf(w, "- %s:%d (%s)\n", displayPath(record.File), record.Line, record.Function)
+				continue
+			}
+			_, _ = fmt.Fprintf(w, "- %s:%d\n", displayPath(record.File), record.Line)
+		}
+	}
+	if len(report.skipped) > 0 {
+		_, _ = fmt.Fprintf(w, "auto breakpoints skipped: %d\n", len(report.skipped))
+		for _, skipped := range report.skipped {
+			_, _ = fmt.Fprintf(w, "- %s\n", skipped)
+		}
+	}
+}
+
+func displayPathFromLocation(location string) string {
+	path, line, ok := strings.Cut(location, ":")
+	if ok && line != "" {
+		return displayPath(path) + ":" + line
+	}
+	return location
 }
 
 func printSnapshot(w *os.File, snapshot *session.Snapshot, sticky bool, initialBreakpoints []breakpointRecord) {
