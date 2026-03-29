@@ -1,6 +1,9 @@
 package main
 
-import "dlvpp/internal/backend"
+import (
+	"dlvpp/internal/backend"
+	"dlvpp/internal/sourceview"
+)
 
 type breakpointRecord struct {
 	ID       int
@@ -16,11 +19,17 @@ func breakpointRecordFromBackend(bp *backend.Breakpoint) (breakpointRecord, bool
 	if bp.Location.File == "" || bp.Location.Line <= 0 {
 		return breakpointRecord{}, false
 	}
+	function := bp.Location.Function
+	if function == "" {
+		if resolved, err := sourceview.EnclosingFunctionName(bp.Location.File, bp.Location.Line); err == nil {
+			function = resolved
+		}
+	}
 	return breakpointRecord{
 		ID:       bp.ID,
 		File:     bp.Location.File,
 		Line:     bp.Location.Line,
-		Function: bp.Location.Function,
+		Function: function,
 	}, true
 }
 

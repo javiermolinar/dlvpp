@@ -264,6 +264,25 @@ func TestRunCommandLoopShowsOutputInspection(t *testing.T) {
 	}
 }
 
+func TestBreakpointRecordFromBackendInfersEnclosingFunctionForFileLineBreakpoint(t *testing.T) {
+	t.Parallel()
+
+	tempDir := t.TempDir()
+	sourcePath := filepath.Join(tempDir, "main.go")
+	source := "package main\n\nfunc main() {\n\tprintln(\"hello\")\n}\n"
+	if err := os.WriteFile(sourcePath, []byte(source), 0o600); err != nil {
+		t.Fatalf("write source fixture: %v", err)
+	}
+
+	record, ok := breakpointRecordFromBackend(&backend.Breakpoint{ID: 1, Location: backend.SourceLocation{File: sourcePath, Line: 4}})
+	if !ok {
+		t.Fatal("expected breakpoint record")
+	}
+	if record.Function != "main.main" {
+		t.Fatalf("expected inferred function main.main, got %q", record.Function)
+	}
+}
+
 func TestRunCommandLoopShowsBreakpointsInspection(t *testing.T) {
 	t.Parallel()
 

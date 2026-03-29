@@ -7,6 +7,7 @@ import (
 	"go/parser"
 	"go/scanner"
 	"go/token"
+	"go/types"
 	"os"
 	"strings"
 )
@@ -71,6 +72,52 @@ func RenderFunction(path string, line int) (string, error) {
 	return RenderRange(path, line, start, end)
 }
 
+func EnclosingFunctionName(path string, line int) (string, error) {
+	if line <= 0 {
+		return "", errorsf("source line out of range: %d", line)
+	}
+	if !strings.HasSuffix(path, ".go") {
+		return "", errorsf("enclosing function only supported for Go source: %s", path)
+	}
+
+	fset := token.NewFileSet()
+	file, err := parser.ParseFile(fset, path, nil, 0)
+	if err != nil {
+		return "", fmt.Errorf("parse go source: %w", err)
+	}
+
+	bestName := ""
+	bestSize := 0
+	ast.Inspect(file, func(node ast.Node) bool {
+		if node == nil {
+			return true
+		}
+
+		decl, ok := node.(*ast.FuncDecl)
+		if !ok || decl.Name == nil {
+			return true
+		}
+
+		start := fset.Position(decl.Pos()).Line
+		end := fset.Position(decl.End()).Line
+		if start == 0 || end == 0 || line < start || line > end {
+			return true
+		}
+
+		size := end - start
+		if bestName == "" || size < bestSize {
+			bestName = qualifiedFunctionName(file, decl)
+			bestSize = size
+		}
+		return true
+	})
+
+	if bestName == "" {
+		return "", errorsf("no enclosing function for line %d", line)
+	}
+	return bestName, nil
+}
+
 func renderedLines(path string) ([]string, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -120,6 +167,18 @@ func formatBreakpointMarker(line int, breakpoints map[int]struct{}) string {
 		return ansiRed + "●" + ansiReset
 	}
 	return " "
+}
+
+func qualifiedFunctionName(file *ast.File, decl *ast.FuncDecl) string {
+	name := decl.Name.Name
+	if decl.Recv != nil && len(decl.Recv.List) > 0 {
+		receiver := types.ExprString(decl.Recv.List[0].Type)
+		return receiver + "." + name
+	}
+	if file != nil && file.Name != nil && file.Name.Name != "" {
+		return file.Name.Name + "." + name
+	}
+	return name
 }
 
 func enclosingFunctionRange(path string, line int) (int, int, error) {
