@@ -148,6 +148,7 @@ OUTPUT-END
 - optional pprof/profile capture and inspection during debug sessions, with profile artifacts or summaries attached to session exports
 - session export for postmortem and LLM-assisted analysis (for example, a structured HTML timeline with stops, source, output, and locals changes)
 - session handover between human and LLM operators, including saved debugger context, detach/reattach workflows, and state restoration in a new `dlvpp` instance
+- a separate daemon-backed session layer for named/concurrent debugger sessions and non-interactive human/LLM control, while keeping `dlvpp` itself minimal
 - deciding whether a richer TUI is worth adding later
 
 ## Validation
