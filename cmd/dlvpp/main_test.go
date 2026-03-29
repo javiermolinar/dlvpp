@@ -256,10 +256,12 @@ func TestFormatTTYLocalsAddsColorByRole(t *testing.T) {
 	out := formatTTYLocals([]backend.Variable{
 		{Name: "message", Type: "string", Value: "\"hello\""},
 		{Name: "total", Type: "int", Value: "42"},
+		{Name: "hex", Type: "uintptr", Value: "0x2a"},
+		{Name: "grouped", Type: "int", Value: "1_000"},
 		{Name: "ok", Type: "bool", Value: "true"},
 		{Name: "err", Type: "error", Value: "nil"},
 	})
-	for _, want := range []string{ansiCyan + "message" + ansiReset, ansiDim + "(string)" + ansiReset, ansiGreen + "\"hello\"" + ansiReset, ansiMagenta + "42" + ansiReset, ansiYellow + "true" + ansiReset, ansiRed + "nil" + ansiReset} {
+	for _, want := range []string{ansiCyan + "message" + ansiReset, ansiDim + "(string)" + ansiReset, ansiGreen + "\"hello\"" + ansiReset, ansiMagenta + "42" + ansiReset, ansiMagenta + "0x2a" + ansiReset, ansiMagenta + "1_000" + ansiReset, ansiYellow + "true" + ansiReset, ansiRed + "nil" + ansiReset} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("expected colored locals output to contain %q, got %q", want, out)
 		}

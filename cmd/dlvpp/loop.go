@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -335,124 +336,6 @@ func sessionExited(state *viewState) bool {
 	return state != nil && state.currentSnapshot != nil && state.currentSnapshot.State.Exited
 }
 
-func showLocals(ctx context.Context, output io.Writer, runner commandRunner, state *viewState) error {
-	if state == nil || state.currentSnapshot == nil || state.currentSnapshot.Frame == nil {
-		return errors.New("locals: no current frame")
-	}
-
-	actionCtx, cancel := context.WithTimeout(ctx, commandActionTimeout)
-	defer cancel()
-
-	locals, err := runner.Locals(actionCtx, state.currentSnapshot.Frame.Ref)
-	if err != nil {
-		return fmt.Errorf("locals: %w", err)
-	}
-	body := formatLocalsForView(locals, inspectionColorsEnabled(state))
-	setInspection(state, "locals", body)
-	_, _ = fmt.Fprint(output, formatInspectionForView(state.currentSnapshot, state, "locals", body, true))
-	return nil
-}
-
-func showOutput(ctx context.Context, output io.Writer, runner commandRunner, state *viewState) error {
-	if state == nil || state.currentSnapshot == nil {
-		return errors.New("output: no current session")
-	}
-
-	actionCtx, cancel := context.WithTimeout(ctx, commandActionTimeout)
-	defer cancel()
-
-	entries, err := runner.Output(actionCtx)
-	if err != nil {
-		return fmt.Errorf("output: %w", err)
-	}
-	body := formatOutputForView(entries, inspectionColorsEnabled(state))
-	setInspection(state, "output", body)
-	_, _ = fmt.Fprint(output, formatInspectionForView(state.currentSnapshot, state, "output", body, true))
-	return nil
-}
-
-func showHelp(output io.Writer, state *viewState) error {
-	body := formatHelpBody()
-	setInspection(state, "help", body)
-	_, _ = fmt.Fprint(output, formatInspectionForView(currentSnapshot(state), state, "help", body, true))
-	return nil
-}
-
-func showBreakpoints(output io.Writer, state *viewState) error {
-	body := formatBreakpointsForView(state)
-	setInspection(state, "breakpoints", body)
-	_, _ = fmt.Fprint(output, formatInspectionForView(currentSnapshot(state), state, "breakpoints", body, true))
-	return nil
-}
-
-func currentSnapshot(state *viewState) *session.Snapshot {
-	if state == nil {
-		return nil
-	}
-	return state.currentSnapshot
-}
-
-func inspectionColorsEnabled(state *viewState) bool {
-	return state != nil && state.sticky && state.outputTTY
-}
-
-func formatHelpBody() string {
-	return strings.Join([]string{
-		"Navigation",
-		"  c   continue",
-		"  n   next",
-		"  s   step in",
-		"  q   quit",
-		"",
-		"Inspection",
-		"  l   locals",
-		"  o   output",
-		"  b   breakpoints",
-		"  h   help",
-		"",
-		"Breakpoints",
-		"  b   list breakpoints",
-		"  :b 14",
-		"  :b add",
-		"  :b file.go:23",
-	}, "\n") + "\n"
-}
-
-func formatBreakpointsForView(state *viewState) string {
-	if state == nil || len(state.breakpoints) == 0 {
-		return "(no breakpoints)\n"
-	}
-
-	var out strings.Builder
-	for _, bp := range state.breakpoints {
-		marker := "o"
-		if state.outputTTY {
-			marker = ansiRed + "●" + ansiReset
-		}
-		location := displayPath(bp.File)
-		if bp.Line > 0 {
-			location = fmt.Sprintf("%s:%d", location, bp.Line)
-		}
-		function := bp.Function
-		if function == "" {
-			function = "-"
-		}
-		if bp.ID > 0 {
-			fmt.Fprintf(&out, "%s #%d  %s  %s\n", marker, bp.ID, location, function)
-			continue
-		}
-		fmt.Fprintf(&out, "%s %s  %s\n", marker, location, function)
-	}
-	return out.String()
-}
-
-func formatLocalsForView(locals []backend.Variable, color bool) string {
-	if !color {
-		return formatLocals(locals)
-	}
-	return formatTTYLocals(locals)
-}
-
 func formatLocals(locals []backend.Variable) string {
 	if len(locals) == 0 {
 		return "(no locals)\n"
@@ -497,13 +380,6 @@ func formatTTYLocals(locals []backend.Variable) string {
 		}
 	}
 	return out.String()
-}
-
-func formatOutputForView(entries []backend.OutputEntry, color bool) string {
-	if !color {
-		return formatOutput(entries)
-	}
-	return formatTTYOutput(entries)
 }
 
 func formatOutput(entries []backend.OutputEntry) string {
@@ -587,24 +463,21 @@ func isQuotedValue(value string) bool {
 }
 
 func isNumericValue(value string) bool {
-	if value == "" {
-		return false
-	}
-	trimmed := strings.TrimLeft(value, "+-")
+	trimmed := strings.TrimSpace(value)
 	if trimmed == "" {
 		return false
 	}
-	hasDigit := false
-	for _, r := range trimmed {
-		switch {
-		case r >= '0' && r <= '9':
-			hasDigit = true
-		case r == '.' || r == '_' || r == 'x' || r == 'X' || r == 'o' || r == 'O' || r == 'b' || r == 'B' || r == 'e' || r == 'E':
-		default:
-			return false
-		}
+	if _, err := strconv.ParseInt(trimmed, 0, 64); err == nil {
+		return true
 	}
-	return hasDigit
+	if _, err := strconv.ParseUint(trimmed, 0, 64); err == nil {
+		return true
+	}
+	normalized := strings.ReplaceAll(trimmed, "_", "")
+	if _, err := strconv.ParseFloat(normalized, 64); err == nil {
+		return true
+	}
+	return false
 }
 
 func formatPlainExitOutput(entries []backend.OutputEntry) string {
