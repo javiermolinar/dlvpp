@@ -1,6 +1,7 @@
 package dap
 
 import (
+	"context"
 	"encoding/json"
 	"strings"
 	"testing"
@@ -53,7 +54,7 @@ func TestHandleEventLockedCapturesOutputEvents(t *testing.T) {
 	if got := client.debugOutput.String(); got != "boom\n" {
 		t.Fatalf("expected captured output, got %q", got)
 	}
-	entries, err := client.Output(nil)
+	entries, err := client.Output(context.TODO())
 	if err != nil {
 		t.Fatalf("Output returned error: %v", err)
 	}
@@ -68,7 +69,7 @@ func TestOutputIncludesProcessStdoutAndFiltersDAPBanner(t *testing.T) {
 	client := New()
 	_, _ = client.stdout.WriteString("DAP server listening at: 127.0.0.1:12345\nhello\nworld\n")
 
-	entries, err := client.Output(nil)
+	entries, err := client.Output(context.TODO())
 	if err != nil {
 		t.Fatalf("Output returned error: %v", err)
 	}

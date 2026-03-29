@@ -198,37 +198,12 @@ func (idx *sourceIndex) fileInfos(files []string) ([]sourceFileInfo, error) {
 	return infos, nil
 }
 
-func discoverCommentBreakpoints(ctx context.Context, idx *sourceIndex, target string, includeTests bool) ([]backend.BreakpointSpec, error) {
-	infos, err := idx.PackageInfo(ctx, target, includeTests)
-	if err != nil {
-		return nil, err
-	}
-	return breakpointSpecsFromInfos(infos), nil
+func discoverCommentBreakpoints(ctx context.Context, _ *sourceIndex, target string, includeTests bool) ([]backend.BreakpointSpec, error) {
+	return discoverCommentBreakpointsInPackage(ctx, target, includeTests)
 }
 
-func discoverCommentBreakpointsInModule(ctx context.Context, idx *sourceIndex, target string, includeTests bool) ([]backend.BreakpointSpec, error) {
-	files, err := idx.ModuleFiles(ctx, target, includeTests)
-	if err != nil {
-		return nil, err
-	}
-	infos, err := idx.fileInfos(files)
-	if err != nil {
-		return nil, err
-	}
-	return breakpointSpecsFromInfos(infos), nil
-}
-
-func breakpointSpecsFromInfos(infos []sourceFileInfo) []backend.BreakpointSpec {
-	var specs []backend.BreakpointSpec
-	for _, info := range infos {
-		for _, marker := range info.Markers {
-			if marker.TargetLine <= 0 {
-				continue
-			}
-			specs = append(specs, backend.BreakpointSpec{Location: fmt.Sprintf("%s:%d", info.Path, marker.TargetLine)})
-		}
-	}
-	return dedupeBreakpointSpecs(specs)
+func discoverCommentBreakpointsInModule(ctx context.Context, _ *sourceIndex, target string, includeTests bool) ([]backend.BreakpointSpec, error) {
+	return discoverCommentBreakpointsAcrossModule(ctx, target, includeTests)
 }
 
 func dedupeBreakpointSpecs(specs []backend.BreakpointSpec) []backend.BreakpointSpec {

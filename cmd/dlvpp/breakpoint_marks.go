@@ -40,13 +40,3 @@ func rememberBreakpoint(state *viewState, bp *backend.Breakpoint) {
 	}
 	state.breakpoints = append(state.breakpoints, record)
 }
-
-func initialBreakpointLocations(bps ...*backend.Breakpoint) []breakpointRecord {
-	locations := make([]breakpointRecord, 0, len(bps))
-	for _, bp := range bps {
-		if record, ok := breakpointRecordFromBackend(bp); ok {
-			locations = append(locations, record)
-		}
-	}
-	return locations
-}
