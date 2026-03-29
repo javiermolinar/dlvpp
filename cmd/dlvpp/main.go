@@ -31,7 +31,7 @@ func run(args []string) error {
 	case "version":
 		return runDlvVersion()
 	case "launch":
-		target, sticky, err := parseLaunchArgs(args[1:])
+		target, sticky, verbose, err := parseLaunchArgs(args[1:])
 		if err != nil {
 			if errors.Is(err, flag.ErrHelp) {
 				usage(os.Stdout)
@@ -40,9 +40,9 @@ func run(args []string) error {
 			usage(os.Stderr)
 			return exitCodeError{code: 2, err: err}
 		}
-		return runLaunch(target, sticky)
+		return runLaunch(target, sticky, verbose)
 	case "test":
-		target, selector, sticky, err := parseTestArgs(args[1:])
+		target, selector, sticky, verbose, err := parseTestArgs(args[1:])
 		if err != nil {
 			if errors.Is(err, flag.ErrHelp) {
 				usage(os.Stdout)
@@ -51,9 +51,9 @@ func run(args []string) error {
 			usage(os.Stderr)
 			return exitCodeError{code: 2, err: err}
 		}
-		return runTest(target, selector, sticky)
+		return runTest(target, selector, sticky, verbose)
 	case "attach":
-		pid, sticky, err := parseAttachArgs(args[1:])
+		pid, sticky, verbose, err := parseAttachArgs(args[1:])
 		if err != nil {
 			if errors.Is(err, flag.ErrHelp) {
 				usage(os.Stdout)
@@ -62,7 +62,7 @@ func run(args []string) error {
 			usage(os.Stderr)
 			return exitCodeError{code: 2, err: err}
 		}
-		return runAttach(pid, sticky)
+		return runAttach(pid, sticky, verbose)
 	case "help", "-h", "--help":
 		usage(os.Stdout)
 		return nil

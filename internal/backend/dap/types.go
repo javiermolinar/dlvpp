@@ -2,8 +2,6 @@ package dap
 
 import (
 	"encoding/json"
-	"errors"
-	"fmt"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -145,19 +143,4 @@ func mapBreakpoint(spec backend.BreakpointSpec, wire dapBreakpoint) *backend.Bre
 
 func filepathBase(path string) string {
 	return filepath.Base(path)
-}
-
-func decodeSingleBreakpoint(body json.RawMessage, command string) (dapBreakpoint, error) {
-	var payload setBreakpointsBody
-	if err := json.Unmarshal(body, &payload); err != nil {
-		return dapBreakpoint{}, fmt.Errorf("decode %s response: %w", command, err)
-	}
-	if len(payload.Breakpoints) == 0 {
-		return dapBreakpoint{}, errors.New("no breakpoint returned")
-	}
-	bp := payload.Breakpoints[0]
-	if !bp.Verified {
-		return dapBreakpoint{}, fmt.Errorf("breakpoint not verified: %s", bp.Message)
-	}
-	return bp, nil
 }

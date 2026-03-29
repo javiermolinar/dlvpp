@@ -13,13 +13,14 @@ func usage(w io.Writer) {
 
 Usage:
   dlvpp version
-  dlvpp launch [-p|--plain] <package-or-path>
-  dlvpp test [-p|--plain] <package-or-path> <test-or-subtest>
-  dlvpp attach [-p|--plain] <pid>
+  dlvpp launch [-p|--plain] [-v|--verbose] <package-or-path>
+  dlvpp test [-p|--plain] [-v|--verbose] <package-or-path> <test-or-subtest>
+  dlvpp attach [-p|--plain] [-v|--verbose] <pid>
 
 Modes:
   default         sticky, human-oriented view with re-rendered function context
   -p, --plain     compact, token-friendly view for agent/LLM-driven debugging
+  -v, --verbose   print startup/debugger bootstrap logs
 
 Interactive commands:
   %s
@@ -35,63 +36,66 @@ Examples:
 `, commandHelpSummary)
 }
 
-func parseLaunchArgs(args []string) (string, bool, error) {
-	fs, plain := newPlainFlagSet("launch")
+func parseLaunchArgs(args []string) (string, bool, bool, error) {
+	fs, plain, verbose := newCommandFlagSet("launch")
 	if err := fs.Parse(args); err != nil {
-		return "", false, err
+		return "", false, false, err
 	}
 	if fs.NArg() == 0 {
-		return "", false, errors.New("launch requires a package or path")
+		return "", false, false, errors.New("launch requires a package or path")
 	}
 	if fs.NArg() > 1 {
-		return "", false, errors.New("launch accepts exactly one package or path")
+		return "", false, false, errors.New("launch accepts exactly one package or path")
 	}
-	return fs.Arg(0), !*plain, nil
+	return fs.Arg(0), !*plain, *verbose, nil
 }
 
-func parseTestArgs(args []string) (string, string, bool, error) {
-	fs, plain := newPlainFlagSet("test")
+func parseTestArgs(args []string) (string, string, bool, bool, error) {
+	fs, plain, verbose := newCommandFlagSet("test")
 	if err := fs.Parse(args); err != nil {
-		return "", "", false, err
+		return "", "", false, false, err
 	}
 	if fs.NArg() == 0 {
-		return "", "", false, errors.New("test requires a package or path")
+		return "", "", false, false, errors.New("test requires a package or path")
 	}
 	if fs.NArg() == 1 {
-		return "", "", false, errors.New("test requires a test or subtest name")
+		return "", "", false, false, errors.New("test requires a test or subtest name")
 	}
 	if fs.NArg() > 2 {
-		return "", "", false, errors.New("test accepts exactly one package or path and one test or subtest name")
+		return "", "", false, false, errors.New("test accepts exactly one package or path and one test or subtest name")
 	}
 
-	return fs.Arg(0), fs.Arg(1), !*plain, nil
+	return fs.Arg(0), fs.Arg(1), !*plain, *verbose, nil
 }
 
-func parseAttachArgs(args []string) (int, bool, error) {
-	fs, plain := newPlainFlagSet("attach")
+func parseAttachArgs(args []string) (int, bool, bool, error) {
+	fs, plain, verbose := newCommandFlagSet("attach")
 	if err := fs.Parse(args); err != nil {
-		return 0, false, err
+		return 0, false, false, err
 	}
 	if fs.NArg() == 0 {
-		return 0, false, errors.New("attach requires a pid")
+		return 0, false, false, errors.New("attach requires a pid")
 	}
 	if fs.NArg() > 1 {
-		return 0, false, errors.New("attach accepts exactly one pid")
+		return 0, false, false, errors.New("attach accepts exactly one pid")
 	}
 
 	pid, err := strconv.Atoi(fs.Arg(0))
 	if err != nil || pid <= 0 {
-		return 0, false, fmt.Errorf("invalid pid: %q", fs.Arg(0))
+		return 0, false, false, fmt.Errorf("invalid pid: %q", fs.Arg(0))
 	}
-	return pid, !*plain, nil
+	return pid, !*plain, *verbose, nil
 }
 
-func newPlainFlagSet(name string) (*flag.FlagSet, *bool) {
+func newCommandFlagSet(name string) (*flag.FlagSet, *bool, *bool) {
 	fs := flag.NewFlagSet(name, flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 
 	plain := new(bool)
+	verbose := new(bool)
 	fs.BoolVar(plain, "plain", false, "disable sticky mode and use compact plain output")
 	fs.BoolVar(plain, "p", false, "disable sticky mode and use compact plain output")
-	return fs, plain
+	fs.BoolVar(verbose, "verbose", false, "print startup/debugger bootstrap logs")
+	fs.BoolVar(verbose, "v", false, "print startup/debugger bootstrap logs")
+	return fs, plain, verbose
 }

@@ -10,7 +10,6 @@ import (
 	"io"
 	"net"
 	"os/exec"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -36,17 +35,21 @@ type Client struct {
 
 	seq int
 
-	serverAddr        string
-	terminateDebuggee bool
-	stopState         *backend.StopState
-	stderr            bytes.Buffer
-	stdout            bytes.Buffer
-	debugOutput       bytes.Buffer
-	targetOutput      []backend.OutputEntry
+	serverAddr          string
+	terminateDebuggee   bool
+	stopState           *backend.StopState
+	stderr              bytes.Buffer
+	stdout              bytes.Buffer
+	debugOutput         bytes.Buffer
+	targetOutput        []backend.OutputEntry
+	fileBreakpoints     map[string][]trackedBreakpoint
+	functionBreakpoints []trackedBreakpoint
 }
 
 func New() *Client {
-	return &Client{}
+	return &Client{
+		fileBreakpoints: make(map[string][]trackedBreakpoint),
+	}
 }
 
 func (c *Client) Launch(ctx context.Context, req backend.LaunchRequest) error {
@@ -166,6 +169,8 @@ func (c *Client) Close() error {
 	c.stdout.Reset()
 	c.debugOutput.Reset()
 	c.targetOutput = nil
+	c.fileBreakpoints = make(map[string][]trackedBreakpoint)
+	c.functionBreakpoints = nil
 
 	return errors.Join(errs...)
 }
@@ -373,64 +378,6 @@ func selectLocalScopes(scopes []scope) []scope {
 
 func (c *Client) Eval(ctx context.Context, frame backend.FrameRef, expr string) (backend.Value, error) {
 	return backend.Value{}, backend.ErrUnsupported
-}
-
-func (c *Client) CreateBreakpoint(ctx context.Context, spec backend.BreakpointSpec) (*backend.Breakpoint, error) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	if c.conn == nil {
-		return nil, errors.New("dap client is not connected")
-	}
-	if spec.Location == "" {
-		return nil, errors.New("breakpoint location is required")
-	}
-
-	if file, line, ok := parseFileLineLocation(spec.Location); ok {
-		if !filepath.IsAbs(file) {
-			absFile, err := filepath.Abs(file)
-			if err != nil {
-				return nil, fmt.Errorf("resolve breakpoint path %q: %w", file, err)
-			}
-			file = absFile
-		}
-		return c.createBreakpointLocked(ctx, spec, "setBreakpoints", map[string]any{
-			"source": map[string]any{
-				"name": filepathBase(file),
-				"path": file,
-			},
-			"breakpoints": []map[string]any{{
-				"line": line,
-			}},
-		})
-	}
-
-	return c.createBreakpointLocked(ctx, spec, "setFunctionBreakpoints", map[string]any{
-		"breakpoints": []map[string]any{{
-			"name": spec.Location,
-		}},
-	})
-}
-
-func (c *Client) createBreakpointLocked(ctx context.Context, spec backend.BreakpointSpec, command string, arguments map[string]any) (*backend.Breakpoint, error) {
-	resp, err := c.requestLocked(ctx, command, arguments)
-	if err != nil {
-		return nil, err
-	}
-
-	wire, err := decodeSingleBreakpoint(resp.Body, command)
-	if err != nil {
-		return nil, err
-	}
-	return mapBreakpoint(spec, wire), nil
-}
-
-func (c *Client) Breakpoints(ctx context.Context) ([]backend.Breakpoint, error) {
-	return nil, backend.ErrUnsupported
-}
-
-func (c *Client) ClearBreakpoint(ctx context.Context, id int) error {
-	return backend.ErrUnsupported
 }
 
 func (c *Client) start(ctx context.Context, workDir string) error {

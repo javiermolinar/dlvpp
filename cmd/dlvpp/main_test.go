@@ -19,7 +19,7 @@ import (
 func TestParseLaunchArgsDefaultsToSticky(t *testing.T) {
 	t.Parallel()
 
-	target, sticky, err := parseLaunchArgs([]string{"./examples/hello"})
+	target, sticky, verbose, err := parseLaunchArgs([]string{"./examples/hello"})
 	if err != nil {
 		t.Fatalf("parseLaunchArgs returned error: %v", err)
 	}
@@ -29,12 +29,15 @@ func TestParseLaunchArgsDefaultsToSticky(t *testing.T) {
 	if !sticky {
 		t.Fatal("expected sticky to be enabled by default")
 	}
+	if verbose {
+		t.Fatal("expected verbose to be disabled by default")
+	}
 }
 
 func TestParseLaunchArgsPlainDisablesSticky(t *testing.T) {
 	t.Parallel()
 
-	target, sticky, err := parseLaunchArgs([]string{"--plain", "./examples/hello"})
+	target, sticky, verbose, err := parseLaunchArgs([]string{"--plain", "./examples/hello"})
 	if err != nil {
 		t.Fatalf("parseLaunchArgs returned error: %v", err)
 	}
@@ -44,12 +47,30 @@ func TestParseLaunchArgsPlainDisablesSticky(t *testing.T) {
 	if sticky {
 		t.Fatal("expected plain mode to disable sticky output")
 	}
+	if verbose {
+		t.Fatal("expected verbose to remain disabled")
+	}
+}
+
+func TestParseLaunchArgsVerboseEnablesStartupLogs(t *testing.T) {
+	t.Parallel()
+
+	_, sticky, verbose, err := parseLaunchArgs([]string{"--verbose", "./examples/hello"})
+	if err != nil {
+		t.Fatalf("parseLaunchArgs returned error: %v", err)
+	}
+	if !sticky {
+		t.Fatal("expected sticky to remain enabled")
+	}
+	if !verbose {
+		t.Fatal("expected verbose to be enabled")
+	}
 }
 
 func TestParseTestArgsDefaultsToSticky(t *testing.T) {
 	t.Parallel()
 
-	target, selector, sticky, err := parseTestArgs([]string{"./pkg/parser", "TestParse"})
+	target, selector, sticky, verbose, err := parseTestArgs([]string{"./pkg/parser", "TestParse"})
 	if err != nil {
 		t.Fatalf("parseTestArgs returned error: %v", err)
 	}
@@ -62,12 +83,15 @@ func TestParseTestArgsDefaultsToSticky(t *testing.T) {
 	if !sticky {
 		t.Fatal("expected sticky to be enabled by default")
 	}
+	if verbose {
+		t.Fatal("expected verbose to be disabled by default")
+	}
 }
 
 func TestParseTestArgsRequiresSelector(t *testing.T) {
 	t.Parallel()
 
-	_, _, _, err := parseTestArgs([]string{"./pkg/parser"})
+	_, _, _, _, err := parseTestArgs([]string{"./pkg/parser"})
 	if err == nil {
 		t.Fatal("expected parseTestArgs to require a selector")
 	}
@@ -79,7 +103,7 @@ func TestParseTestArgsRequiresSelector(t *testing.T) {
 func TestParseTestArgsPlainDisablesSticky(t *testing.T) {
 	t.Parallel()
 
-	target, selector, sticky, err := parseTestArgs([]string{"--plain", "./pkg/parser", "TestParse/case-1"})
+	target, selector, sticky, verbose, err := parseTestArgs([]string{"--plain", "./pkg/parser", "TestParse/case-1"})
 	if err != nil {
 		t.Fatalf("parseTestArgs returned error: %v", err)
 	}
@@ -92,12 +116,15 @@ func TestParseTestArgsPlainDisablesSticky(t *testing.T) {
 	if sticky {
 		t.Fatal("expected plain mode to disable sticky output")
 	}
+	if verbose {
+		t.Fatal("expected verbose to remain disabled")
+	}
 }
 
 func TestParseAttachArgsPlainDisablesSticky(t *testing.T) {
 	t.Parallel()
 
-	pid, sticky, err := parseAttachArgs([]string{"-p", "123"})
+	pid, sticky, verbose, err := parseAttachArgs([]string{"-p", "123"})
 	if err != nil {
 		t.Fatalf("parseAttachArgs returned error: %v", err)
 	}
@@ -107,6 +134,9 @@ func TestParseAttachArgsPlainDisablesSticky(t *testing.T) {
 	if sticky {
 		t.Fatal("expected plain mode to disable sticky output")
 	}
+	if verbose {
+		t.Fatal("expected verbose to remain disabled")
+	}
 }
 
 func TestUsageDescribesModesAndCommands(t *testing.T) {
@@ -115,7 +145,7 @@ func TestUsageDescribesModesAndCommands(t *testing.T) {
 	var output bytes.Buffer
 	usage(&output)
 	text := output.String()
-	if !strings.Contains(text, "Modes:") || !strings.Contains(text, "-p, --plain") {
+	if !strings.Contains(text, "Modes:") || !strings.Contains(text, "-p, --plain") || !strings.Contains(text, "-v, --verbose") {
 		t.Fatalf("expected mode help, got %q", text)
 	}
 	if !strings.Contains(text, "Interactive commands:") || !strings.Contains(text, commandHelpSummary) || !strings.Contains(text, "Use h during a session") {
@@ -828,6 +858,7 @@ func (f fakeCloser) Close() error {
 type fakeCommandRunner struct {
 	actions         []session.Action
 	breakpointSpecs []backend.BreakpointSpec
+	breakpoints     []backend.Breakpoint
 	snapshots       []*session.Snapshot
 	snapshotIndex   int
 	breakpoint      *backend.Breakpoint
@@ -865,7 +896,33 @@ func (f *fakeCommandRunner) CreateBreakpoint(_ context.Context, spec backend.Bre
 	if f.err != nil {
 		return nil, f.err
 	}
+	if f.breakpoint != nil {
+		updated := false
+		for i, existing := range f.breakpoints {
+			if existing.Location.File == f.breakpoint.Location.File && existing.Location.Line == f.breakpoint.Location.Line && existing.Location.Function == f.breakpoint.Location.Function {
+				f.breakpoints[i] = *f.breakpoint
+				updated = true
+				break
+			}
+		}
+		if !updated {
+			f.breakpoints = append(f.breakpoints, *f.breakpoint)
+		}
+	}
 	return f.breakpoint, nil
+}
+
+func (f *fakeCommandRunner) Breakpoints(_ context.Context) ([]backend.Breakpoint, error) {
+	if f.err != nil {
+		return nil, f.err
+	}
+	if len(f.breakpoints) > 0 {
+		return append([]backend.Breakpoint(nil), f.breakpoints...), nil
+	}
+	if f.breakpoint != nil {
+		return []backend.Breakpoint{*f.breakpoint}, nil
+	}
+	return nil, nil
 }
 
 func (f *fakeCommandRunner) Locals(_ context.Context, _ backend.FrameRef) ([]backend.Variable, error) {

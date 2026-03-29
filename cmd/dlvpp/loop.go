@@ -42,6 +42,7 @@ var (
 type commandRunner interface {
 	Do(ctx context.Context, action session.Action) (*session.Snapshot, error)
 	CreateBreakpoint(ctx context.Context, spec backend.BreakpointSpec) (*backend.Breakpoint, error)
+	Breakpoints(ctx context.Context) ([]backend.Breakpoint, error)
 	Locals(ctx context.Context, frame backend.FrameRef) ([]backend.Variable, error)
 	Output(ctx context.Context) ([]backend.OutputEntry, error)
 }
@@ -221,6 +222,18 @@ func ttyCommandText(commandBuf []byte) string {
 	return ":" + strings.TrimSpace(string(commandBuf))
 }
 
+func refreshBreakpointState(ctx context.Context, state *viewState, runner commandRunner) error {
+	if state == nil || runner == nil {
+		return nil
+	}
+	bps, err := runner.Breakpoints(ctx)
+	if err != nil {
+		return err
+	}
+	state.breakpoints = breakpointRecordsFromBackend(bps)
+	return nil
+}
+
 func processCommand(ctx context.Context, output io.Writer, runner commandRunner, state *viewState, text string) (bool, error) {
 	err := executeCommandText(ctx, text, output, runner, state)
 	switch {
@@ -287,7 +300,12 @@ func executeCommandText(ctx context.Context, text string, output io.Writer, runn
 		if err != nil {
 			return fmt.Errorf("break: %w", err)
 		}
-		rememberBreakpoint(state, bp)
+		if err := refreshBreakpointState(actionCtx, state, runner); err != nil {
+			if !errors.Is(err, backend.ErrUnsupported) {
+				return fmt.Errorf("break: %w", err)
+			}
+			rememberBreakpoint(state, bp)
+		}
 		if state != nil && state.sticky && state.currentSnapshot != nil {
 			clearInspection(state)
 			_, _ = fmt.Fprint(output, formatSnapshotForView(state.currentSnapshot, state, true))

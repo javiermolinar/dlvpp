@@ -81,6 +81,10 @@ func (c *Controller) CreateBreakpoint(ctx context.Context, spec backend.Breakpoi
 	return c.backend.CreateBreakpoint(ctx, spec)
 }
 
+func (c *Controller) Breakpoints(ctx context.Context) ([]backend.Breakpoint, error) {
+	return c.backend.Breakpoints(ctx)
+}
+
 func (c *Controller) Locals(ctx context.Context, frame backend.FrameRef) ([]backend.Variable, error) {
 	return c.backend.Locals(ctx, frame)
 }
