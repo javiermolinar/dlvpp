@@ -19,12 +19,15 @@ import (
 func TestParseLaunchArgsDefaultsToSticky(t *testing.T) {
 	t.Parallel()
 
-	target, sticky, verbose, err := parseLaunchArgs([]string{"./examples/hello"})
+	target, programArgs, sticky, verbose, err := parseLaunchArgs([]string{"./examples/hello"})
 	if err != nil {
 		t.Fatalf("parseLaunchArgs returned error: %v", err)
 	}
 	if target != "./examples/hello" {
 		t.Fatalf("unexpected target: %q", target)
+	}
+	if len(programArgs) != 0 {
+		t.Fatalf("expected no program args, got %#v", programArgs)
 	}
 	if !sticky {
 		t.Fatal("expected sticky to be enabled by default")
@@ -37,12 +40,15 @@ func TestParseLaunchArgsDefaultsToSticky(t *testing.T) {
 func TestParseLaunchArgsPlainDisablesSticky(t *testing.T) {
 	t.Parallel()
 
-	target, sticky, verbose, err := parseLaunchArgs([]string{"--plain", "./examples/hello"})
+	target, programArgs, sticky, verbose, err := parseLaunchArgs([]string{"--plain", "./examples/hello"})
 	if err != nil {
 		t.Fatalf("parseLaunchArgs returned error: %v", err)
 	}
 	if target != "./examples/hello" {
 		t.Fatalf("unexpected target: %q", target)
+	}
+	if len(programArgs) != 0 {
+		t.Fatalf("expected no program args, got %#v", programArgs)
 	}
 	if sticky {
 		t.Fatal("expected plain mode to disable sticky output")
@@ -55,9 +61,12 @@ func TestParseLaunchArgsPlainDisablesSticky(t *testing.T) {
 func TestParseLaunchArgsVerboseEnablesStartupLogs(t *testing.T) {
 	t.Parallel()
 
-	_, sticky, verbose, err := parseLaunchArgs([]string{"--verbose", "./examples/hello"})
+	_, programArgs, sticky, verbose, err := parseLaunchArgs([]string{"--verbose", "./examples/hello"})
 	if err != nil {
 		t.Fatalf("parseLaunchArgs returned error: %v", err)
+	}
+	if len(programArgs) != 0 {
+		t.Fatalf("expected no program args, got %#v", programArgs)
 	}
 	if !sticky {
 		t.Fatal("expected sticky to remain enabled")
@@ -67,10 +76,44 @@ func TestParseLaunchArgsVerboseEnablesStartupLogs(t *testing.T) {
 	}
 }
 
+func TestParseLaunchArgsSupportsProgramArgsAfterSeparator(t *testing.T) {
+	t.Parallel()
+
+	target, programArgs, sticky, verbose, err := parseLaunchArgs([]string{"./examples/hello", "--", "--name", "alice"})
+	if err != nil {
+		t.Fatalf("parseLaunchArgs returned error: %v", err)
+	}
+	if target != "./examples/hello" {
+		t.Fatalf("unexpected target: %q", target)
+	}
+	wantArgs := []string{"--name", "alice"}
+	if strings.Join(programArgs, "|") != strings.Join(wantArgs, "|") {
+		t.Fatalf("unexpected program args: got %#v want %#v", programArgs, wantArgs)
+	}
+	if !sticky {
+		t.Fatal("expected sticky to remain enabled")
+	}
+	if verbose {
+		t.Fatal("expected verbose to remain disabled")
+	}
+}
+
+func TestParseLaunchArgsRequiresSeparatorBeforeProgramArgs(t *testing.T) {
+	t.Parallel()
+
+	_, _, _, _, err := parseLaunchArgs([]string{"./examples/hello", "alice"})
+	if err == nil {
+		t.Fatal("expected parseLaunchArgs to reject extra positional args without --")
+	}
+	if !strings.Contains(err.Error(), "use -- to pass program args") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
 func TestParseTestArgsDefaultsToSticky(t *testing.T) {
 	t.Parallel()
 
-	target, selector, sticky, verbose, err := parseTestArgs([]string{"./pkg/parser", "TestParse"})
+	target, selector, programArgs, sticky, verbose, err := parseTestArgs([]string{"./pkg/parser", "TestParse"})
 	if err != nil {
 		t.Fatalf("parseTestArgs returned error: %v", err)
 	}
@@ -79,6 +122,9 @@ func TestParseTestArgsDefaultsToSticky(t *testing.T) {
 	}
 	if selector != "TestParse" {
 		t.Fatalf("unexpected selector: %q", selector)
+	}
+	if len(programArgs) != 0 {
+		t.Fatalf("expected no test binary args, got %#v", programArgs)
 	}
 	if !sticky {
 		t.Fatal("expected sticky to be enabled by default")
@@ -91,7 +137,7 @@ func TestParseTestArgsDefaultsToSticky(t *testing.T) {
 func TestParseTestArgsRequiresSelector(t *testing.T) {
 	t.Parallel()
 
-	_, _, _, _, err := parseTestArgs([]string{"./pkg/parser"})
+	_, _, _, _, _, err := parseTestArgs([]string{"./pkg/parser"})
 	if err == nil {
 		t.Fatal("expected parseTestArgs to require a selector")
 	}
@@ -103,7 +149,7 @@ func TestParseTestArgsRequiresSelector(t *testing.T) {
 func TestParseTestArgsPlainDisablesSticky(t *testing.T) {
 	t.Parallel()
 
-	target, selector, sticky, verbose, err := parseTestArgs([]string{"--plain", "./pkg/parser", "TestParse/case-1"})
+	target, selector, programArgs, sticky, verbose, err := parseTestArgs([]string{"--plain", "./pkg/parser", "TestParse/case-1"})
 	if err != nil {
 		t.Fatalf("parseTestArgs returned error: %v", err)
 	}
@@ -113,11 +159,51 @@ func TestParseTestArgsPlainDisablesSticky(t *testing.T) {
 	if selector != "TestParse/case-1" {
 		t.Fatalf("unexpected selector: %q", selector)
 	}
+	if len(programArgs) != 0 {
+		t.Fatalf("expected no test binary args, got %#v", programArgs)
+	}
 	if sticky {
 		t.Fatal("expected plain mode to disable sticky output")
 	}
 	if verbose {
 		t.Fatal("expected verbose to remain disabled")
+	}
+}
+
+func TestParseTestArgsSupportsBinaryArgsAfterSeparator(t *testing.T) {
+	t.Parallel()
+
+	target, selector, programArgs, sticky, verbose, err := parseTestArgs([]string{"./pkg/parser", "TestParse/case-1", "--", "-test.v"})
+	if err != nil {
+		t.Fatalf("parseTestArgs returned error: %v", err)
+	}
+	if target != "./pkg/parser" {
+		t.Fatalf("unexpected target: %q", target)
+	}
+	if selector != "TestParse/case-1" {
+		t.Fatalf("unexpected selector: %q", selector)
+	}
+	wantArgs := []string{"-test.v"}
+	if strings.Join(programArgs, "|") != strings.Join(wantArgs, "|") {
+		t.Fatalf("unexpected test binary args: got %#v want %#v", programArgs, wantArgs)
+	}
+	if !sticky {
+		t.Fatal("expected sticky to remain enabled")
+	}
+	if verbose {
+		t.Fatal("expected verbose to remain disabled")
+	}
+}
+
+func TestParseTestArgsRequiresSeparatorBeforeBinaryArgs(t *testing.T) {
+	t.Parallel()
+
+	_, _, _, _, _, err := parseTestArgs([]string{"./pkg/parser", "TestParse", "-test.v"})
+	if err == nil {
+		t.Fatal("expected parseTestArgs to reject extra positional args without --")
+	}
+	if !strings.Contains(err.Error(), "use -- to pass test binary args") {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }
 
@@ -147,6 +233,12 @@ func TestUsageDescribesModesAndCommands(t *testing.T) {
 	text := output.String()
 	if !strings.Contains(text, "Modes:") || !strings.Contains(text, "-p, --plain") || !strings.Contains(text, "-v, --verbose") {
 		t.Fatalf("expected mode help, got %q", text)
+	}
+	if !strings.Contains(text, "launch [-p|--plain] [-v|--verbose] <package-or-path> [-- <program-args...>]") {
+		t.Fatalf("expected launch usage with program args separator, got %q", text)
+	}
+	if !strings.Contains(text, "test [-p|--plain] [-v|--verbose] <package-or-path> <test-or-subtest> [-- <test-binary-args...>]") {
+		t.Fatalf("expected test usage with binary args separator, got %q", text)
 	}
 	if !strings.Contains(text, "Interactive commands:") || !strings.Contains(text, commandHelpSummary) || !strings.Contains(text, "Use h during a session") {
 		t.Fatalf("expected interactive command help, got %q", text)

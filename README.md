@@ -6,8 +6,8 @@ Minimal, opinionated Delve frontend for Go.
 
 ## What works today
 
-- launch a Go package/path with a default breakpoint at `main.main`
-- launch a Go package in test mode and target a specific test or subtest
+- launch a Go package/path with a default breakpoint at `main.main` and optional program arguments
+- launch a Go package in test mode, target a specific test or subtest, and pass extra test binary arguments
 - attach to an existing process by PID
 - continue execution, step with `next`, and step in
 - inspect locals for the current frame
@@ -36,9 +36,11 @@ You can also run it directly with `go run`:
 ```bash
 go run ./cmd/dlvpp help
 go run ./cmd/dlvpp launch ./examples/hello
+go run ./cmd/dlvpp launch ./examples/hello -- --name alice
 go run ./cmd/dlvpp launch --plain ./examples/hello
 go run ./cmd/dlvpp test ./examples/parser TestParseInt
 go run ./cmd/dlvpp test --plain ./examples/parser 'TestParseInt/ok'
+go run ./cmd/dlvpp test ./examples/parser TestParseInt -- -test.v
 go run ./cmd/dlvpp attach <pid>
 go run ./cmd/dlvpp attach --plain <pid>
 ```
@@ -47,8 +49,8 @@ go run ./cmd/dlvpp attach --plain <pid>
 
 ```text
 dlvpp version
-dlvpp launch [-p|--plain] <package-or-path>
-dlvpp test [-p|--plain] <package-or-path> <test-or-subtest>
+dlvpp launch [-p|--plain] <package-or-path> [-- <program-args...>]
+dlvpp test [-p|--plain] <package-or-path> <test-or-subtest> [-- <test-binary-args...>]
 dlvpp attach [-p|--plain] <pid>
 ```
 
@@ -87,8 +89,10 @@ Use `Esc` in sticky TTY mode to leave the current inspection view.
 ## Example
 
 ```bash
-go run ./cmd/dlvpp launch --plain ./examples/hello
+go run ./cmd/dlvpp launch --plain ./examples/hello -- --name alice
 ```
+
+Arguments after `--` are passed through to the launched program or test binary.
 
 Example plain output:
 

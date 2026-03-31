@@ -10,12 +10,28 @@ import (
 func TestNewLaunchRequestKeepsRawDirectoryTarget(t *testing.T) {
 	t.Parallel()
 
-	req, err := newLaunchRequest("./examples/hello")
+	req, err := newLaunchRequest("./examples/hello", nil)
 	if err != nil {
 		t.Fatalf("newLaunchRequest returned error: %v", err)
 	}
 	if req.Target != "./examples/hello" {
 		t.Fatalf("unexpected target: %q", req.Target)
+	}
+	if len(req.Args) != 0 {
+		t.Fatalf("expected no program args, got %#v", req.Args)
+	}
+}
+
+func TestNewLaunchRequestPreservesProgramArgs(t *testing.T) {
+	t.Parallel()
+
+	programArgs := []string{"--name", "alice"}
+	req, err := newLaunchRequest("./examples/hello", programArgs)
+	if err != nil {
+		t.Fatalf("newLaunchRequest returned error: %v", err)
+	}
+	if strings.Join(req.Args, "|") != strings.Join(programArgs, "|") {
+		t.Fatalf("unexpected program args: got %#v want %#v", req.Args, programArgs)
 	}
 }
 
@@ -26,7 +42,7 @@ func TestNewLaunchRequestRejectsExistingGoFile(t *testing.T) {
 	targetFile := filepath.Join(tempDir, "cmd", "app", "main.go")
 	mustWriteFile(t, targetFile, "package main\n")
 
-	_, err := newLaunchRequest(targetFile)
+	_, err := newLaunchRequest(targetFile, nil)
 	if err == nil {
 		t.Fatal("expected newLaunchRequest to reject .go file target")
 	}
@@ -41,7 +57,7 @@ func TestNewLaunchRequestRejectsExistingGoFile(t *testing.T) {
 func TestNewLaunchRequestLeavesImportPathUnchanged(t *testing.T) {
 	t.Parallel()
 
-	req, err := newLaunchRequest("example.com/app/cmd/tool")
+	req, err := newLaunchRequest("example.com/app/cmd/tool", nil)
 	if err != nil {
 		t.Fatalf("newLaunchRequest returned error: %v", err)
 	}
@@ -54,7 +70,7 @@ func TestNewLaunchRequestLeavesMissingGoFileUntouched(t *testing.T) {
 	t.Parallel()
 
 	target := filepath.Join(t.TempDir(), "missing.go")
-	req, err := newLaunchRequest(target)
+	req, err := newLaunchRequest(target, nil)
 	if err != nil {
 		t.Fatalf("newLaunchRequest returned error: %v", err)
 	}
@@ -66,7 +82,7 @@ func TestNewLaunchRequestLeavesMissingGoFileUntouched(t *testing.T) {
 func TestNewTestLaunchRequestUsesTestModeAndRunArgs(t *testing.T) {
 	t.Parallel()
 
-	req, err := newTestLaunchRequest("./pkg/parser", "TestParse/case-1")
+	req, err := newTestLaunchRequest("./pkg/parser", "TestParse/case-1", nil)
 	if err != nil {
 		t.Fatalf("newTestLaunchRequest returned error: %v", err)
 	}
@@ -77,6 +93,19 @@ func TestNewTestLaunchRequestUsesTestModeAndRunArgs(t *testing.T) {
 		t.Fatalf("unexpected target: %q", req.Target)
 	}
 	wantArgs := []string{"-test.run", "^TestParse$/^case-1$"}
+	if strings.Join(req.Args, "|") != strings.Join(wantArgs, "|") {
+		t.Fatalf("unexpected test args: got %#v want %#v", req.Args, wantArgs)
+	}
+}
+
+func TestNewTestLaunchRequestAppendsAdditionalBinaryArgs(t *testing.T) {
+	t.Parallel()
+
+	req, err := newTestLaunchRequest("./pkg/parser", "TestParse/case-1", []string{"-test.v", "-test.count=1"})
+	if err != nil {
+		t.Fatalf("newTestLaunchRequest returned error: %v", err)
+	}
+	wantArgs := []string{"-test.run", "^TestParse$/^case-1$", "-test.v", "-test.count=1"}
 	if strings.Join(req.Args, "|") != strings.Join(wantArgs, "|") {
 		t.Fatalf("unexpected test args: got %#v want %#v", req.Args, wantArgs)
 	}

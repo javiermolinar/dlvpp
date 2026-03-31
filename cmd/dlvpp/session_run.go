@@ -42,12 +42,12 @@ func runDlvVersion() error {
 	return nil
 }
 
-func runLaunch(target string, sticky bool, log *slog.Logger) error {
+func runLaunch(target string, programArgs []string, sticky bool, log *slog.Logger) error {
 	signalCtx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
 	return withController(signalCtx, func(startCtx context.Context, controller *session.Controller) error {
-		launchReq, err := newLaunchRequest(target)
+		launchReq, err := newLaunchRequest(target, programArgs)
 		if err != nil {
 			return fmt.Errorf("resolve launch target: %w", err)
 		}
@@ -66,12 +66,12 @@ func runLaunch(target string, sticky bool, log *slog.Logger) error {
 	})
 }
 
-func runTest(target string, selector string, sticky bool, log *slog.Logger) error {
+func runTest(target string, selector string, programArgs []string, sticky bool, log *slog.Logger) error {
 	signalCtx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
 	return withController(signalCtx, func(startCtx context.Context, controller *session.Controller) error {
-		launchReq, err := newTestLaunchRequest(target, selector)
+		launchReq, err := newTestLaunchRequest(target, selector, programArgs)
 		if err != nil {
 			return fmt.Errorf("resolve test target: %w", err)
 		}

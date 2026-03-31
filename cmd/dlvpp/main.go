@@ -31,7 +31,7 @@ func run(args []string) error {
 	case "version":
 		return runDlvVersion()
 	case "launch":
-		target, sticky, verbose, err := parseLaunchArgs(args[1:])
+		target, programArgs, sticky, verbose, err := parseLaunchArgs(args[1:])
 		if err != nil {
 			if errors.Is(err, flag.ErrHelp) {
 				usage(os.Stdout)
@@ -40,9 +40,9 @@ func run(args []string) error {
 			usage(os.Stderr)
 			return exitCodeError{code: 2, err: err}
 		}
-		return runLaunch(target, sticky, newCommandLogger(verbose, os.Stdout))
+		return runLaunch(target, programArgs, sticky, newCommandLogger(verbose, os.Stdout))
 	case "test":
-		target, selector, sticky, verbose, err := parseTestArgs(args[1:])
+		target, selector, programArgs, sticky, verbose, err := parseTestArgs(args[1:])
 		if err != nil {
 			if errors.Is(err, flag.ErrHelp) {
 				usage(os.Stdout)
@@ -51,7 +51,7 @@ func run(args []string) error {
 			usage(os.Stderr)
 			return exitCodeError{code: 2, err: err}
 		}
-		return runTest(target, selector, sticky, newCommandLogger(verbose, os.Stdout))
+		return runTest(target, selector, programArgs, sticky, newCommandLogger(verbose, os.Stdout))
 	case "attach":
 		pid, sticky, verbose, err := parseAttachArgs(args[1:])
 		if err != nil {

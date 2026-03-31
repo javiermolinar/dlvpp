@@ -13,8 +13,8 @@ func usage(w io.Writer) {
 
 Usage:
   dlvpp version
-  dlvpp launch [-p|--plain] [-v|--verbose] <package-or-path>
-  dlvpp test [-p|--plain] [-v|--verbose] <package-or-path> <test-or-subtest>
+  dlvpp launch [-p|--plain] [-v|--verbose] <package-or-path> [-- <program-args...>]
+  dlvpp test [-p|--plain] [-v|--verbose] <package-or-path> <test-or-subtest> [-- <test-binary-args...>]
   dlvpp attach [-p|--plain] [-v|--verbose] <pid>
 
 Modes:
@@ -29,43 +29,63 @@ Interactive commands:
 Examples:
   dlvpp version
   dlvpp launch ./examples/hello
-  dlvpp launch -p ./path/to/your/package
+  dlvpp launch -p ./path/to/your/package -- --name alice
   dlvpp test ./pkg/parser TestParse
-  dlvpp test -p ./pkg/parser 'TestParse/case-1'
+  dlvpp test -p ./pkg/parser 'TestParse/case-1' -- -test.v
   dlvpp attach -p 12345
 `, commandHelpSummary)
 }
 
-func parseLaunchArgs(args []string) (string, bool, bool, error) {
+func parseLaunchArgs(args []string) (string, []string, bool, bool, error) {
 	fs, plain, verbose := newCommandFlagSet("launch")
 	if err := fs.Parse(args); err != nil {
-		return "", false, false, err
+		return "", nil, false, false, err
 	}
-	if fs.NArg() == 0 {
-		return "", false, false, errors.New("launch requires a package or path")
+
+	positionals, programArgs, hasSeparator := splitPassthroughArgs(fs.Args())
+	if len(positionals) == 0 {
+		return "", nil, false, false, errors.New("launch requires a package or path")
 	}
-	if fs.NArg() > 1 {
-		return "", false, false, errors.New("launch accepts exactly one package or path")
+	if len(positionals) > 1 {
+		if !hasSeparator {
+			return "", nil, false, false, errors.New("launch accepts exactly one package or path; use -- to pass program args")
+		}
+		return "", nil, false, false, errors.New("launch accepts exactly one package or path before --")
 	}
-	return fs.Arg(0), !*plain, *verbose, nil
+	return positionals[0], programArgs, !*plain, *verbose, nil
 }
 
-func parseTestArgs(args []string) (string, string, bool, bool, error) {
+func parseTestArgs(args []string) (string, string, []string, bool, bool, error) {
 	fs, plain, verbose := newCommandFlagSet("test")
 	if err := fs.Parse(args); err != nil {
-		return "", "", false, false, err
-	}
-	if fs.NArg() == 0 {
-		return "", "", false, false, errors.New("test requires a package or path")
-	}
-	if fs.NArg() == 1 {
-		return "", "", false, false, errors.New("test requires a test or subtest name")
-	}
-	if fs.NArg() > 2 {
-		return "", "", false, false, errors.New("test accepts exactly one package or path and one test or subtest name")
+		return "", "", nil, false, false, err
 	}
 
-	return fs.Arg(0), fs.Arg(1), !*plain, *verbose, nil
+	positionals, programArgs, hasSeparator := splitPassthroughArgs(fs.Args())
+	if len(positionals) == 0 {
+		return "", "", nil, false, false, errors.New("test requires a package or path")
+	}
+	if len(positionals) == 1 {
+		return "", "", nil, false, false, errors.New("test requires a test or subtest name")
+	}
+	if len(positionals) > 2 {
+		if !hasSeparator {
+			return "", "", nil, false, false, errors.New("test accepts exactly one package or path and one test or subtest name; use -- to pass test binary args")
+		}
+		return "", "", nil, false, false, errors.New("test accepts exactly one package or path and one test or subtest name before --")
+	}
+
+	return positionals[0], positionals[1], programArgs, !*plain, *verbose, nil
+}
+
+func splitPassthroughArgs(args []string) ([]string, []string, bool) {
+	for idx, arg := range args {
+		if arg != "--" {
+			continue
+		}
+		return args[:idx], args[idx+1:], true
+	}
+	return args, nil, false
 }
 
 func parseAttachArgs(args []string) (int, bool, bool, error) {

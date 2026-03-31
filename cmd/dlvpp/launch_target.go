@@ -10,19 +10,23 @@ import (
 	"dlvpp/internal/backend"
 )
 
-func newLaunchRequest(target string) (backend.LaunchRequest, error) {
+func newLaunchRequest(target string, programArgs []string) (backend.LaunchRequest, error) {
 	target, err := validatePackageTarget("launch", target)
 	if err != nil {
 		return backend.LaunchRequest{}, err
 	}
 
-	return backend.LaunchRequest{
+	req := backend.LaunchRequest{
 		Mode:   backend.LaunchModeDebug,
 		Target: target,
-	}, nil
+	}
+	if len(programArgs) > 0 {
+		req.Args = append([]string(nil), programArgs...)
+	}
+	return req, nil
 }
 
-func newTestLaunchRequest(target string, selector string) (backend.LaunchRequest, error) {
+func newTestLaunchRequest(target string, selector string, programArgs []string) (backend.LaunchRequest, error) {
 	target, err := validatePackageTarget("test", target)
 	if err != nil {
 		return backend.LaunchRequest{}, err
@@ -32,8 +36,11 @@ func newTestLaunchRequest(target string, selector string) (backend.LaunchRequest
 		Mode:   backend.LaunchModeTest,
 		Target: target,
 	}
-	if selector != "" {
-		req.Args = testRunArgs(selector)
+
+	combinedArgs := append([]string(nil), testRunArgs(selector)...)
+	combinedArgs = append(combinedArgs, programArgs...)
+	if len(combinedArgs) > 0 {
+		req.Args = combinedArgs
 	}
 	return req, nil
 }
