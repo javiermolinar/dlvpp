@@ -355,17 +355,17 @@ func sessionExited(state *viewState) bool {
 }
 
 func formatLocals(locals []backend.Variable) string {
-	if len(locals) == 0 {
-		return "(no locals)\n"
+	visible, hiddenCount := filterDisplayedLocals(locals)
+	if len(visible) == 0 {
+		if hiddenCount == 0 {
+			return "(no locals)\n"
+		}
+		return "(no user locals)\n" + formatHiddenLocalsSummary(hiddenCount, false)
 	}
 
 	var out strings.Builder
-	for _, local := range locals {
-		value := local.Value
-		if value == "" {
-			value = "<no value>"
-		}
-		value = truncateText(value, 96)
+	for _, local := range visible {
+		value := formatLocalDisplayValue(local)
 		switch {
 		case local.Type != "":
 			fmt.Fprintf(&out, "%s (%s) = %s\n", local.Name, local.Type, value)
@@ -373,21 +373,22 @@ func formatLocals(locals []backend.Variable) string {
 			fmt.Fprintf(&out, "%s = %s\n", local.Name, value)
 		}
 	}
+	out.WriteString(formatHiddenLocalsSummary(hiddenCount, false))
 	return out.String()
 }
 
 func formatTTYLocals(locals []backend.Variable) string {
-	if len(locals) == 0 {
-		return ansiDim + "(no locals)" + ansiReset + "\n"
+	visible, hiddenCount := filterDisplayedLocals(locals)
+	if len(visible) == 0 {
+		if hiddenCount == 0 {
+			return ansiDim + "(no locals)" + ansiReset + "\n"
+		}
+		return ansiDim + "(no user locals)" + ansiReset + "\n" + formatHiddenLocalsSummary(hiddenCount, true)
 	}
 
 	var out strings.Builder
-	for _, local := range locals {
-		value := local.Value
-		if value == "" {
-			value = "<no value>"
-		}
-		value = truncateText(value, 96)
+	for _, local := range visible {
+		value := formatLocalDisplayValue(local)
 		coloredName := ansiCyan + local.Name + ansiReset
 		coloredValue := colorizeLocalValue(value)
 		switch {
@@ -397,7 +398,120 @@ func formatTTYLocals(locals []backend.Variable) string {
 			fmt.Fprintf(&out, "%s = %s\n", coloredName, coloredValue)
 		}
 	}
+	out.WriteString(formatHiddenLocalsSummary(hiddenCount, true))
 	return out.String()
+}
+
+func filterDisplayedLocals(locals []backend.Variable) ([]backend.Variable, int) {
+	visible := make([]backend.Variable, 0, len(locals))
+	hiddenCount := 0
+	for _, local := range locals {
+		if isSyntheticLocal(local.Name) {
+			hiddenCount++
+			continue
+		}
+		visible = append(visible, local)
+	}
+	return visible, hiddenCount
+}
+
+func isSyntheticLocal(name string) bool {
+	trimmed := strings.TrimSpace(name)
+	if trimmed == "" {
+		return false
+	}
+	if strings.HasPrefix(trimmed, "~") {
+		return true
+	}
+	return strings.HasPrefix(trimmed, "(") && strings.HasSuffix(trimmed, ")")
+}
+
+func formatLocalDisplayValue(local backend.Variable) string {
+	value := strings.TrimSpace(local.Value)
+	if value == "" {
+		value = "<no value>"
+	}
+	if !local.HasChildren {
+		return truncateText(value, 96)
+	}
+	return summarizeCompositeLocalValue(local.Type, value)
+}
+
+func summarizeCompositeLocalValue(typeName string, value string) string {
+	if value == "nil" || value == "<nil>" {
+		return value
+	}
+
+	firstBrace := strings.Index(value, "{")
+	firstLen := topLevelLenIndex(value)
+	if firstBrace >= 0 && (firstLen < 0 || firstBrace < firstLen) {
+		return "{…}"
+	}
+	if summary := extractLenCapSummary(value, firstLen); summary != "" {
+		return summary
+	}
+
+	baseType := strings.TrimLeft(strings.TrimSpace(typeName), "*")
+	switch {
+	case strings.HasPrefix(baseType, "map[") || strings.HasPrefix(value, "map[") || strings.Contains(value, " map["):
+		return "map[…]"
+	case strings.HasPrefix(baseType, "[]") || strings.HasPrefix(baseType, "[") || strings.HasPrefix(value, "["):
+		return "[…]"
+	default:
+		return truncateText(value, 48)
+	}
+}
+
+func topLevelLenIndex(value string) int {
+	if strings.HasPrefix(value, "len:") {
+		return 0
+	}
+	return strings.Index(value, " len:")
+}
+
+func extractLenCapSummary(value string, lenIndex int) string {
+	if lenIndex < 0 || lenIndex >= len(value) {
+		return ""
+	}
+
+	rest := strings.TrimSpace(value[lenIndex:])
+	first, remaining := splitSummaryField(rest)
+	first = strings.TrimSpace(first)
+	if !strings.HasPrefix(first, "len:") {
+		return ""
+	}
+
+	parts := []string{first}
+	remaining = strings.TrimSpace(remaining)
+	if strings.HasPrefix(remaining, "cap:") {
+		second, _ := splitSummaryField(remaining)
+		parts = append(parts, strings.TrimSpace(second))
+	}
+	return strings.Join(parts, ", ")
+}
+
+func splitSummaryField(value string) (string, string) {
+	comma := strings.Index(value, ",")
+	if comma < 0 {
+		return value, ""
+	}
+	return value[:comma], value[comma+1:]
+}
+
+func formatHiddenLocalsSummary(hiddenCount int, color bool) string {
+	if hiddenCount == 0 {
+		return ""
+	}
+
+	noun := "locals"
+	if hiddenCount == 1 {
+		noun = "local"
+	}
+	text := fmt.Sprintf("(%d synthetic %s hidden)", hiddenCount, noun)
+	if !color {
+		return text + "\n"
+	}
+	return ansiDim + text + ansiReset + "\n"
 }
 
 func formatOutput(entries []backend.OutputEntry) string {

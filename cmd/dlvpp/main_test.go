@@ -409,6 +409,46 @@ func TestFormatTTYLocalsAddsColorByRole(t *testing.T) {
 	}
 }
 
+func TestFormatLocalsHidesSyntheticLocalsByDefault(t *testing.T) {
+	t.Parallel()
+
+	out := formatLocals([]backend.Variable{
+		{Name: "~r0", Type: "[]string", Value: "[]string len: 0, cap: 0, nil", HasChildren: true},
+		{Name: "(err)", Type: "error", Value: "nil"},
+		{Name: "value", Type: "string", Value: "\"ok\""},
+	})
+	if strings.Contains(out, "~r0") || strings.Contains(out, "(err)") {
+		t.Fatalf("expected synthetic locals to be hidden, got %q", out)
+	}
+	if !strings.Contains(out, "value (string) = \"ok\"") {
+		t.Fatalf("expected visible local to remain, got %q", out)
+	}
+	if !strings.Contains(out, "(2 synthetic locals hidden)") {
+		t.Fatalf("expected hidden synthetic locals summary, got %q", out)
+	}
+}
+
+func TestFormatLocalsCollapsesCompositeValues(t *testing.T) {
+	t.Parallel()
+
+	out := formatLocals([]backend.Variable{
+		{Name: "p", Type: "main.Page", Value: "main.Page {Header: main.PageHeader {HType: 10, NumCells: 190}}", HasChildren: true},
+		{Name: "dat", Type: "*os.File", Value: "*os.File {file: *os.file {name: \"companies.db\"}}", HasChildren: true},
+		{Name: "resp", Type: "[]string", Value: "[]string len: 2, cap: 2, [\"\",\"\"]", HasChildren: true},
+		{Name: "r", Type: "*bufio.Reader", Value: "*bufio.Reader {buf: []uint8 len: 4096, cap: 4096, [17,3]}", HasChildren: true},
+	})
+	for _, want := range []string{
+		"p (main.Page) = {…}",
+		"dat (*os.File) = {…}",
+		"resp ([]string) = len: 2, cap: 2",
+		"r (*bufio.Reader) = {…}",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("expected compact composite locals output to contain %q, got %q", want, out)
+		}
+	}
+}
+
 func TestFormatTTYOutputDifferentiatesStdoutAndStderr(t *testing.T) {
 	t.Parallel()
 
