@@ -30,7 +30,7 @@ const (
 	ttyArrowDown          = 'B'
 	ttyHistoryLimit       = 100
 	ttyEscapeReadTimeout  = 150 * time.Millisecond
-	commandHelpSummary    = "c=continue, n=next, s=step in, l=locals, o=output, b=breakpoints, h=help, :e <local>, :b <location>, q=quit"
+	commandHelpSummary    = "c=continue, n=next, s=step in, l=locals, o=output, b=breakpoints, h=help, :l <expr>, :e <local>, :b <location>, q=quit"
 	ansiReset             = "\x1b[0m"
 	ansiDim               = "\x1b[2m"
 	ansiCyan              = "\x1b[36m"
@@ -50,6 +50,7 @@ type commandRunner interface {
 	Breakpoints(ctx context.Context) ([]backend.Breakpoint, error)
 	Locals(ctx context.Context, frame backend.FrameRef) ([]backend.Variable, error)
 	Children(ctx context.Context, reference int) ([]backend.Variable, error)
+	Eval(ctx context.Context, frame backend.FrameRef, expr string) (backend.Value, error)
 	Output(ctx context.Context) ([]backend.OutputEntry, error)
 }
 
@@ -390,7 +391,10 @@ func executeCommandText(ctx context.Context, text string, output io.Writer, runn
 
 	parts := strings.Fields(text)
 	command := parts[0]
-	args := parts[1:]
+	argText := ""
+	if len(text) > len(command) {
+		argText = strings.TrimSpace(text[len(command):])
+	}
 
 	if sessionExited(state) {
 		if command == "o" {
@@ -408,10 +412,10 @@ func executeCommandText(ctx context.Context, text string, output io.Writer, runn
 		if !colonCommand {
 			return showBreakpoints(output, state)
 		}
-		if len(args) == 0 {
+		if argText == "" {
 			return errors.New("break requires a location")
 		}
-		location, err := resolveBreakpointLocation(strings.Join(args, " "), breakpointResolveContext{Snapshot: state.currentSnapshot})
+		location, err := resolveBreakpointLocation(argText, breakpointResolveContext{Snapshot: state.currentSnapshot})
 		if err != nil {
 			return fmt.Errorf("break: %w", err)
 		}
@@ -446,11 +450,14 @@ func executeCommandText(ctx context.Context, text string, output io.Writer, runn
 		if !colonCommand {
 			return fmt.Errorf("unknown command: %s", command)
 		}
-		if len(args) == 0 {
+		if argText == "" {
 			return errors.New("expand requires a local name")
 		}
-		return expandLocal(ctx, output, runner, state, strings.Join(args, " "))
+		return expandLocal(ctx, output, runner, state, argText)
 	case "l":
+		if colonCommand && argText != "" {
+			return showEval(ctx, output, runner, state, argText)
+		}
 		return showLocals(ctx, output, runner, state)
 	case "o":
 		return showOutput(ctx, output, runner, state)

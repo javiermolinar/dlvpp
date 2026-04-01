@@ -219,6 +219,16 @@ func formatInspectionForView(snapshot *session.Snapshot, state *viewState, title
 	return appendPrompt(out.String(), state)
 }
 
+func formatInlineBodyForView(snapshot *session.Snapshot, state *viewState, body string, clear bool) string {
+	base := formatSnapshotForView(snapshot, state, clear)
+	trimmed := base
+	if state != nil && state.outputTTY && !sessionExited(state) {
+		trimmed = strings.TrimSuffix(trimmed, ">")
+	}
+	trimmed = strings.TrimRight(trimmed, "\n") + "\n\n" + strings.TrimRight(body, "\n") + "\n"
+	return appendPrompt(trimmed, state)
+}
+
 func formatPlainInspection(snapshot *session.Snapshot, title string, body string) string {
 	trimmedBody := strings.TrimRight(body, "\n")
 	if snapshot != nil && snapshot.Frame != nil {

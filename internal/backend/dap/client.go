@@ -401,7 +401,40 @@ func selectLocalScopes(scopes []scope) []scope {
 }
 
 func (c *Client) Eval(ctx context.Context, frame backend.FrameRef, expr string) (backend.Value, error) {
-	return backend.Value{}, backend.ErrUnsupported
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if c.conn == nil {
+		return backend.Value{}, errors.New("dap client is not connected")
+	}
+	if frame.Index <= 0 {
+		return backend.Value{}, errors.New("frame id is required")
+	}
+	expr = strings.TrimSpace(expr)
+	if expr == "" {
+		return backend.Value{}, errors.New("expression is required")
+	}
+
+	resp, err := c.requestLocked(ctx, "evaluate", map[string]any{
+		"expression": expr,
+		"frameId":    frame.Index,
+		"context":    "watch",
+	})
+	if err != nil {
+		return backend.Value{}, err
+	}
+
+	var body evaluateBody
+	if err := json.Unmarshal(resp.Body, &body); err != nil {
+		return backend.Value{}, fmt.Errorf("decode evaluate response: %w", err)
+	}
+
+	return backend.Value{
+		Type:        body.Type,
+		Value:       body.Result,
+		HasChildren: body.VariablesReference > 0,
+		Reference:   body.VariablesReference,
+	}, nil
 }
 
 func (c *Client) start(ctx context.Context, workDir string) error {

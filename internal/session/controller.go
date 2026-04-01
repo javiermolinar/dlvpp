@@ -93,6 +93,10 @@ func (c *Controller) Children(ctx context.Context, reference int) ([]backend.Var
 	return c.backend.Children(ctx, reference)
 }
 
+func (c *Controller) Eval(ctx context.Context, frame backend.FrameRef, expr string) (backend.Value, error) {
+	return c.backend.Eval(ctx, frame, expr)
+}
+
 func (c *Controller) Output(ctx context.Context) ([]backend.OutputEntry, error) {
 	return c.backend.Output(ctx)
 }

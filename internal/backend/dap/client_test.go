@@ -5,6 +5,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 	"time"
 
@@ -237,5 +238,105 @@ func TestLaunchLocals(t *testing.T) {
 	}
 	if !foundTotal {
 		t.Fatalf("expected total local value 42, got %#v", locals)
+	}
+}
+
+func TestLaunchEval(t *testing.T) {
+	if _, err := exec.LookPath("dlv"); err != nil {
+		t.Skip("dlv not found in PATH")
+	}
+
+	_, thisFile, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("failed to resolve test file path")
+	}
+
+	repoRoot := filepath.Clean(filepath.Join(filepath.Dir(thisFile), "..", "..", ".."))
+	target := filepath.Join(repoRoot, "examples", "locals")
+	breakpoint := filepath.Join(repoRoot, "examples", "locals", "main.go") + ":90"
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	client := New()
+	if err := client.Launch(ctx, backend.LaunchRequest{
+		Mode:    backend.LaunchModeDebug,
+		Target:  target,
+		WorkDir: repoRoot,
+	}); err != nil {
+		t.Fatalf("launch failed: %v", err)
+	}
+	defer func() {
+		if err := client.Close(); err != nil {
+			t.Fatalf("close failed: %v", err)
+		}
+	}()
+
+	if _, err := client.CreateBreakpoint(ctx, backend.BreakpointSpec{Location: breakpoint}); err != nil {
+		t.Fatalf("create breakpoint: %v", err)
+	}
+	state, err := client.Continue(ctx)
+	if err != nil {
+		t.Fatalf("continue: %v", err)
+	}
+	frames, err := client.Stack(ctx, state.ThreadID, 1)
+	if err != nil {
+		t.Fatalf("stack before eval: %v", err)
+	}
+	if len(frames) == 0 {
+		t.Fatal("expected stack frame before eval")
+	}
+	summary, err := client.Eval(ctx, frames[0].Ref, "summary")
+	if err != nil {
+		t.Fatalf("eval summary: %v", err)
+	}
+	if summary.Type != "string" {
+		t.Fatalf("expected string eval type, got %#v", summary)
+	}
+	if !strings.Contains(summary.Value, "Acme Latam/3/2") {
+		t.Fatalf("expected summary eval value, got %#v", summary)
+	}
+
+	length, err := client.Eval(ctx, frames[0].Ref, "len(result.Matches)")
+	if err != nil {
+		t.Fatalf("eval len: %v", err)
+	}
+	if length.Type != "int" || length.Value != "3" {
+		t.Fatalf("expected len eval to return 3, got %#v", length)
+	}
+
+	preview, err := client.Eval(ctx, frames[0].Ref, "string(result.Preview)")
+	if err != nil {
+		t.Fatalf("eval conversion: %v", err)
+	}
+	if preview.Type != "string" || !strings.Contains(preview.Value, "rowid=42") {
+		t.Fatalf("expected string conversion eval value, got %#v", preview)
+	}
+
+	address, err := client.Eval(ctx, frames[0].Ref, "acct.Address")
+	if err != nil {
+		t.Fatalf("eval composite: %v", err)
+	}
+	if !address.HasChildren || address.Reference <= 0 {
+		t.Fatalf("expected composite eval children reference, got %#v", address)
+	}
+	children, err := client.Children(ctx, address.Reference)
+	if err != nil {
+		t.Fatalf("children for composite eval: %v", err)
+	}
+	foundCity := false
+	for _, child := range children {
+		if child.Name == "City" && strings.Contains(child.Value, "Barcelona") {
+			foundCity = true
+			break
+		}
+	}
+	if !foundCity {
+		t.Fatalf("expected composite eval children to include City, got %#v", children)
+	}
+
+	_, err = client.Eval(ctx, frames[0].Ref, `fmt.Sprintf("x=%s", summary)`)
+	if err == nil || !strings.Contains(err.Error(), "function calls not allowed") {
+		t.Fatalf("expected function call eval to be rejected, got %v", err)
 	}
 }

@@ -96,6 +96,12 @@ type dapVariable struct {
 	VariablesReference int    `json:"variablesReference"`
 }
 
+type evaluateBody struct {
+	Result             string `json:"result"`
+	Type               string `json:"type"`
+	VariablesReference int    `json:"variablesReference"`
+}
+
 func mapStopReason(reason string) backend.StopReason {
 	switch reason {
 	case "entry":

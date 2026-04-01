@@ -111,8 +111,10 @@ type OutputEntry struct {
 }
 
 type Value struct {
-	Type  string
-	Value string
+	Type        string
+	Value       string
+	HasChildren bool
+	Reference   int
 }
 
 type Goroutine struct {

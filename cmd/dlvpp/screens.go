@@ -19,6 +19,39 @@ func showLocals(ctx context.Context, output io.Writer, runner commandRunner, sta
 	return renderLocals(ctx, output, runner, state, locals)
 }
 
+func showEval(ctx context.Context, output io.Writer, runner commandRunner, state *viewState, expr string) error {
+	if state == nil || state.currentSnapshot == nil || state.currentSnapshot.Frame == nil {
+		return errors.New("locals: no current frame")
+	}
+	actionCtx, cancel := context.WithTimeout(ctx, commandActionTimeout)
+	defer cancel()
+
+	value, err := runner.Eval(actionCtx, state.currentSnapshot.Frame.Ref, expr)
+	if err != nil {
+		return fmt.Errorf("eval: %w", err)
+	}
+
+	children, err := evalChildren(actionCtx, runner, value)
+	if err != nil {
+		return err
+	}
+
+	body := formatEvalForView(expr, value, children, inspectionColorsEnabled(state))
+	if state != nil && state.sticky && hasInspection(state) {
+		setInspection(state, "locals", body)
+		_, _ = fmt.Fprint(output, formatInspectionForView(state.currentSnapshot, state, "locals", body, true))
+		return nil
+	}
+	if state != nil && state.sticky {
+		clearInspection(state)
+		_, _ = fmt.Fprint(output, formatInlineBodyForView(state.currentSnapshot, state, body, true))
+		return nil
+	}
+	setInspection(state, "locals", body)
+	_, _ = fmt.Fprint(output, formatInspectionForView(state.currentSnapshot, state, "locals", body, true))
+	return nil
+}
+
 func expandLocal(ctx context.Context, output io.Writer, runner commandRunner, state *viewState, name string) error {
 	locals, err := fetchLocals(ctx, runner, state)
 	if err != nil {
@@ -275,6 +308,7 @@ func formatHelpBody() string {
 		"  o   output",
 		"  b   breakpoints",
 		"  h   help",
+		"  :l summary",
 		"  :e result",
 		"",
 		"Breakpoints",
@@ -321,6 +355,41 @@ func formatLocalsForView(locals []backend.Variable, expanded map[string][]backen
 		return formatTTYLocals(locals)
 	}
 	return formatExpandedLocals(locals, expanded, color)
+}
+
+func formatEvalForView(expr string, value backend.Value, children []backend.Variable, color bool) string {
+	local := backend.Variable{
+		Name:        expr,
+		Type:        value.Type,
+		Value:       value.Value,
+		HasChildren: value.HasChildren,
+		Reference:   value.Reference,
+	}
+	if len(children) == 0 {
+		var out strings.Builder
+		writeLocalLine(&out, local, color, "")
+		return out.String()
+	}
+
+	var out strings.Builder
+	writeLocalLine(&out, local, color, "")
+	visibleChildren, hiddenChildren := filterDisplayedLocals(children)
+	for _, child := range visibleChildren {
+		writeLocalLine(&out, child, color, "  ")
+	}
+	out.WriteString(formatHiddenLocalsSummaryWithIndent(hiddenChildren, color, "  "))
+	return out.String()
+}
+
+func evalChildren(ctx context.Context, runner commandRunner, value backend.Value) ([]backend.Variable, error) {
+	if !value.HasChildren || value.Reference <= 0 {
+		return nil, nil
+	}
+	children, err := runner.Children(ctx, value.Reference)
+	if err != nil {
+		return nil, fmt.Errorf("eval: %w", err)
+	}
+	return children, nil
 }
 
 func formatOutputForView(entries []backend.OutputEntry, color bool) string {

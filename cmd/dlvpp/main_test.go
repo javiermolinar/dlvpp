@@ -333,6 +333,248 @@ func TestRunCommandLoopShowsLocals(t *testing.T) {
 	}
 }
 
+func TestRunCommandLoopEvaluatesExpressionWithColonL(t *testing.T) {
+	t.Parallel()
+
+	runner := &fakeCommandRunner{
+		evals: map[string]backend.Value{
+			"summary": {Type: "string", Value: "\"Acme Latam/3/2\""},
+		},
+		snapshots: []*session.Snapshot{{
+			State: backend.StopState{},
+			Frame: &backend.Frame{Ref: backend.FrameRef{GoroutineID: 1, Index: 2}, Location: backend.SourceLocation{File: "main.go", Line: 12, Function: "main.main"}},
+		}},
+	}
+	var output bytes.Buffer
+	if err := runCommandLoop(context.Background(), bytes.NewBufferString(":l summary\nq\n"), &output, runner, runner.currentSnapshot(), false); err != nil {
+		t.Fatalf("runCommandLoop returned error: %v", err)
+	}
+	text := output.String()
+	if !strings.Contains(text, "locals main.main main.go:12") || !strings.Contains(text, "summary (string) = \"Acme Latam/3/2\"") {
+		t.Fatalf("expected eval locals output, got %q", text)
+	}
+}
+
+func TestRunCommandLoopEvaluatesCompositeExpressionWithExpansion(t *testing.T) {
+	t.Parallel()
+
+	runner := &fakeCommandRunner{
+		evals: map[string]backend.Value{
+			"acct.Address": {Type: "main.address", Value: "main.address {City: \"Barcelona\", Country: \"ES\"}", HasChildren: true, Reference: 11},
+		},
+		children: map[int][]backend.Variable{
+			11: {
+				{Name: "City", Type: "string", Value: "\"Barcelona\""},
+				{Name: "Country", Type: "string", Value: "\"ES\""},
+			},
+		},
+		snapshots: []*session.Snapshot{{
+			State: backend.StopState{},
+			Frame: &backend.Frame{Ref: backend.FrameRef{GoroutineID: 1, Index: 2}, Location: backend.SourceLocation{File: "main.go", Line: 12, Function: "main.main"}},
+		}},
+	}
+	var output bytes.Buffer
+	if err := runCommandLoop(context.Background(), bytes.NewBufferString(":l acct.Address\nq\n"), &output, runner, runner.currentSnapshot(), false); err != nil {
+		t.Fatalf("runCommandLoop returned error: %v", err)
+	}
+	text := output.String()
+	for _, want := range []string{
+		"acct.Address (main.address) = {…}",
+		"  City (string) = \"Barcelona\"",
+		"  Country (string) = \"ES\"",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("expected expanded eval output to contain %q, got %q", want, text)
+		}
+	}
+}
+
+func TestRunCommandLoopEvaluatesBuiltinAndConversionExpressionsWithColonL(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name     string
+		expr     string
+		value    backend.Value
+		rendered string
+	}{
+		{
+			name:     "len builtin",
+			expr:     "len(matches)",
+			value:    backend.Value{Type: "int", Value: "3"},
+			rendered: "len(matches) (int) = 3",
+		},
+		{
+			name:     "cap builtin",
+			expr:     "cap(preview)",
+			value:    backend.Value{Type: "int", Value: "64"},
+			rendered: "cap(preview) (int) = 64",
+		},
+		{
+			name:     "string conversion",
+			expr:     "string(buf)",
+			value:    backend.Value{Type: "string", Value: "\"hello\""},
+			rendered: "string(buf) (string) = \"hello\"",
+		},
+	}
+
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			runner := &fakeCommandRunner{
+				evals: map[string]backend.Value{tc.expr: tc.value},
+				snapshots: []*session.Snapshot{{
+					State: backend.StopState{},
+					Frame: &backend.Frame{Ref: backend.FrameRef{GoroutineID: 1, Index: 2}, Location: backend.SourceLocation{File: "main.go", Line: 12, Function: "main.main"}},
+				}},
+			}
+			var output bytes.Buffer
+			if err := runCommandLoop(context.Background(), bytes.NewBufferString(":l "+tc.expr+"\nq\n"), &output, runner, runner.currentSnapshot(), false); err != nil {
+				t.Fatalf("runCommandLoop returned error: %v", err)
+			}
+			text := output.String()
+			if !strings.Contains(text, "locals main.main main.go:12") || !strings.Contains(text, tc.rendered) {
+				t.Fatalf("expected eval output to contain %q, got %q", tc.rendered, text)
+			}
+		})
+	}
+}
+
+func TestRunCommandLoopSurfacesBackendEvalErrorForColonLFunctionCall(t *testing.T) {
+	t.Parallel()
+
+	runner := &fakeCommandRunner{
+		err: errors.New("function calls not allowed without using 'call'"),
+		snapshots: []*session.Snapshot{{
+			State: backend.StopState{},
+			Frame: &backend.Frame{Ref: backend.FrameRef{GoroutineID: 1, Index: 2}, Location: backend.SourceLocation{File: "main.go", Line: 12, Function: "main.main"}},
+		}},
+	}
+	var output bytes.Buffer
+	if err := runCommandLoop(context.Background(), bytes.NewBufferString(":l sum(a, b)\nq\n"), &output, runner, runner.currentSnapshot(), false); err != nil {
+		t.Fatalf("runCommandLoop returned error: %v", err)
+	}
+	if !strings.Contains(output.String(), "eval: function calls not allowed without using 'call'") {
+		t.Fatalf("expected backend eval error, got %q", output.String())
+	}
+}
+
+func TestRunCommandLoopShowsEvalInlineInStickyMode(t *testing.T) {
+	t.Parallel()
+
+	tempDir := t.TempDir()
+	sourcePath := filepath.Join(tempDir, "main.go")
+	source := "package main\n\nfunc main() {\n\tprintln(\"hello\")\n}\n"
+	if err := os.WriteFile(sourcePath, []byte(source), 0o600); err != nil {
+		t.Fatalf("write source fixture: %v", err)
+	}
+
+	runner := &fakeCommandRunner{
+		evals: map[string]backend.Value{
+			"summary": {Type: "string", Value: "\"Acme Latam/3/2\""},
+		},
+		snapshots: []*session.Snapshot{{
+			State: backend.StopState{},
+			Frame: &backend.Frame{Ref: backend.FrameRef{GoroutineID: 1, Index: 2}, Location: backend.SourceLocation{File: sourcePath, Line: 3, Function: "main.main"}},
+		}},
+	}
+	var output bytes.Buffer
+	if err := runCommandLoop(context.Background(), bytes.NewBufferString(":l summary\nq\n"), &output, runner, runner.currentSnapshot(), true); err != nil {
+		t.Fatalf("runCommandLoop returned error: %v", err)
+	}
+	text := output.String()
+	if !strings.Contains(text, "stopped: main.main") {
+		t.Fatalf("expected sticky snapshot output, got %q", text)
+	}
+	if !strings.Contains(text, "summary (string) = \"Acme Latam/3/2\"") {
+		t.Fatalf("expected inline eval output, got %q", text)
+	}
+	if strings.Contains(text, "locals:\n") {
+		t.Fatalf("expected eval to stay in snapshot view, got %q", text)
+	}
+}
+
+func TestRunCommandLoopShowsExpandedEvalInlineInStickyMode(t *testing.T) {
+	t.Parallel()
+
+	tempDir := t.TempDir()
+	sourcePath := filepath.Join(tempDir, "main.go")
+	source := "package main\n\nfunc main() {\n\tprintln(\"hello\")\n}\n"
+	if err := os.WriteFile(sourcePath, []byte(source), 0o600); err != nil {
+		t.Fatalf("write source fixture: %v", err)
+	}
+
+	runner := &fakeCommandRunner{
+		evals: map[string]backend.Value{
+			"acct.Address": {Type: "main.address", Value: "main.address {City: \"Barcelona\", Country: \"ES\"}", HasChildren: true, Reference: 11},
+		},
+		children: map[int][]backend.Variable{
+			11: {
+				{Name: "City", Type: "string", Value: "\"Barcelona\""},
+				{Name: "Country", Type: "string", Value: "\"ES\""},
+			},
+		},
+		snapshots: []*session.Snapshot{{
+			State: backend.StopState{},
+			Frame: &backend.Frame{Ref: backend.FrameRef{GoroutineID: 1, Index: 2}, Location: backend.SourceLocation{File: sourcePath, Line: 3, Function: "main.main"}},
+		}},
+	}
+	var output bytes.Buffer
+	if err := runCommandLoop(context.Background(), bytes.NewBufferString(":l acct.Address\nq\n"), &output, runner, runner.currentSnapshot(), true); err != nil {
+		t.Fatalf("runCommandLoop returned error: %v", err)
+	}
+	text := output.String()
+	for _, want := range []string{
+		"acct.Address (main.address) = {…}",
+		"  City (string) = \"Barcelona\"",
+		"  Country (string) = \"ES\"",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("expected sticky expanded eval output to contain %q, got %q", want, text)
+		}
+	}
+}
+
+func TestShowEvalKeepsLocalsInspectionInStickyMode(t *testing.T) {
+	t.Parallel()
+
+	snapshot := &session.Snapshot{
+		State: backend.StopState{},
+		Frame: &backend.Frame{Ref: backend.FrameRef{GoroutineID: 1, Index: 2}, Location: backend.SourceLocation{File: "main.go", Line: 12, Function: "main.main"}},
+	}
+	runner := &fakeCommandRunner{
+		locals: []backend.Variable{{Name: "total", Type: "int", Value: "42"}},
+		evals: map[string]backend.Value{
+			"summary": {Type: "string", Value: "\"Acme Latam/3/2\""},
+		},
+		snapshots: []*session.Snapshot{snapshot},
+	}
+	state := &viewState{sticky: true, currentSnapshot: snapshot, expandedLocals: map[string]struct{}{"acct": {}}}
+	var output bytes.Buffer
+	if err := showLocals(context.Background(), &output, runner, state); err != nil {
+		t.Fatalf("showLocals returned error: %v", err)
+	}
+	output.Reset()
+	if err := showEval(context.Background(), &output, runner, state, "summary"); err != nil {
+		t.Fatalf("showEval returned error: %v", err)
+	}
+	text := output.String()
+	if !strings.HasPrefix(text, "locals:\n") {
+		t.Fatalf("expected locals inspection output, got %q", text)
+	}
+	if !strings.Contains(text, "summary (string) = \"Acme Latam/3/2\"") {
+		t.Fatalf("expected eval result in locals inspection, got %q", text)
+	}
+	if strings.Contains(text, "stopped: main.main") {
+		t.Fatalf("expected to stay out of main snapshot view, got %q", text)
+	}
+	if _, ok := state.expandedLocals["acct"]; !ok {
+		t.Fatalf("expected expanded locals to be preserved, got %#v", state.expandedLocals)
+	}
+}
+
 func TestRunCommandLoopExpandsLocalInline(t *testing.T) {
 	t.Parallel()
 
@@ -1174,6 +1416,7 @@ type fakeCommandRunner struct {
 	breakpoint      *backend.Breakpoint
 	locals          []backend.Variable
 	children        map[int][]backend.Variable
+	evals           map[string]backend.Value
 	output          []backend.OutputEntry
 	err             error
 }
@@ -1251,6 +1494,20 @@ func (f *fakeCommandRunner) Children(_ context.Context, reference int) ([]backen
 		return nil, nil
 	}
 	return f.children[reference], nil
+}
+
+func (f *fakeCommandRunner) Eval(_ context.Context, _ backend.FrameRef, expr string) (backend.Value, error) {
+	if f.err != nil {
+		return backend.Value{}, f.err
+	}
+	if f.evals == nil {
+		return backend.Value{}, backend.ErrUnsupported
+	}
+	value, ok := f.evals[expr]
+	if !ok {
+		return backend.Value{}, backend.ErrUnsupported
+	}
+	return value, nil
 }
 
 func (f *fakeCommandRunner) Output(_ context.Context) ([]backend.OutputEntry, error) {
