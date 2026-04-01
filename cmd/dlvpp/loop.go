@@ -19,20 +19,25 @@ import (
 )
 
 const (
-	commandActionTimeout = 15 * time.Second
-	ttyCtrlC             = 3
-	ttyCtrlD             = 4
-	ttyEscape            = 27
-	ttyBackspace         = 8
-	ttyDelete            = 127
-	commandHelpSummary   = "c=continue, n=next, s=step in, l=locals, o=output, b=breakpoints, h=help, :e <local>, :b <location>, q=quit"
-	ansiReset            = "\x1b[0m"
-	ansiDim              = "\x1b[2m"
-	ansiCyan             = "\x1b[36m"
-	ansiGreen            = "\x1b[32m"
-	ansiMagenta          = "\x1b[35m"
-	ansiYellow           = "\x1b[33m"
-	ansiRed              = "\x1b[31m"
+	commandActionTimeout  = 15 * time.Second
+	ttyCtrlC              = 3
+	ttyCtrlD              = 4
+	ttyEscape             = 27
+	ttyBackspace          = 8
+	ttyDelete             = 127
+	ttyArrowSequenceStart = '['
+	ttyArrowUp            = 'A'
+	ttyArrowDown          = 'B'
+	ttyHistoryLimit       = 100
+	ttyEscapeReadTimeout  = 150 * time.Millisecond
+	commandHelpSummary    = "c=continue, n=next, s=step in, l=locals, o=output, b=breakpoints, h=help, :e <local>, :b <location>, q=quit"
+	ansiReset             = "\x1b[0m"
+	ansiDim               = "\x1b[2m"
+	ansiCyan              = "\x1b[36m"
+	ansiGreen             = "\x1b[32m"
+	ansiMagenta           = "\x1b[35m"
+	ansiYellow            = "\x1b[33m"
+	ansiRed               = "\x1b[31m"
 )
 
 var (
@@ -95,6 +100,14 @@ func runTTYCommandLoop(ctx context.Context, input *os.File, output io.Writer, ru
 
 	var commandBuf []byte
 	commandMode := false
+	historyIndex := -1
+	var historyDraft []byte
+	var commandHistory []string
+
+	runTTYCommand := func(text string) (bool, error) {
+		commandHistory = appendTTYCommandHistory(commandHistory, text)
+		return processCommand(ctx, output, runner, state, text)
+	}
 
 	for {
 		b, err := reader.Next(ctx)
@@ -104,7 +117,7 @@ func runTTYCommandLoop(ctx context.Context, input *os.File, output io.Writer, ru
 
 		if sessionExited(state) && !commandMode {
 			if b == 'o' && !hasInspection(state) {
-				if done, err := processCommand(ctx, output, runner, state, "o"); done || err != nil {
+				if done, err := runTTYCommand("o"); done || err != nil {
 					return err
 				}
 				continue
@@ -125,49 +138,49 @@ func runTTYCommandLoop(ctx context.Context, input *os.File, output io.Writer, ru
 			}
 		case 'h':
 			if !commandMode {
-				if done, err := processCommand(ctx, output, runner, state, "h"); done || err != nil {
+				if done, err := runTTYCommand("h"); done || err != nil {
 					return err
 				}
 				continue
 			}
 		case 'b':
 			if !commandMode {
-				if done, err := processCommand(ctx, output, runner, state, "b"); done || err != nil {
+				if done, err := runTTYCommand("b"); done || err != nil {
 					return err
 				}
 				continue
 			}
 		case 'c':
 			if !commandMode {
-				if done, err := processCommand(ctx, output, runner, state, "c"); done || err != nil {
+				if done, err := runTTYCommand("c"); done || err != nil {
 					return err
 				}
 				continue
 			}
 		case 'n':
 			if !commandMode {
-				if done, err := processCommand(ctx, output, runner, state, "n"); done || err != nil {
+				if done, err := runTTYCommand("n"); done || err != nil {
 					return err
 				}
 				continue
 			}
 		case 's':
 			if !commandMode {
-				if done, err := processCommand(ctx, output, runner, state, "s"); done || err != nil {
+				if done, err := runTTYCommand("s"); done || err != nil {
 					return err
 				}
 				continue
 			}
 		case 'l':
 			if !commandMode {
-				if done, err := processCommand(ctx, output, runner, state, "l"); done || err != nil {
+				if done, err := runTTYCommand("l"); done || err != nil {
 					return err
 				}
 				continue
 			}
 		case 'o':
 			if !commandMode {
-				if done, err := processCommand(ctx, output, runner, state, "o"); done || err != nil {
+				if done, err := runTTYCommand("o"); done || err != nil {
 					return err
 				}
 				continue
@@ -175,7 +188,9 @@ func runTTYCommandLoop(ctx context.Context, input *os.File, output io.Writer, ru
 		case ':':
 			if !commandMode {
 				commandMode = true
-				commandBuf = commandBuf[:0]
+				commandBuf = append(commandBuf[:0], ':')
+				historyIndex = -1
+				historyDraft = nil
 				_, _ = fmt.Fprint(output, ":")
 				continue
 			}
@@ -183,31 +198,67 @@ func runTTYCommandLoop(ctx context.Context, input *os.File, output io.Writer, ru
 			if !commandMode {
 				continue
 			}
+			text := strings.TrimSpace(string(commandBuf))
 			_, _ = fmt.Fprintln(output)
 			commandMode = false
-			if done, err := processCommand(ctx, output, runner, state, ttyCommandText(commandBuf)); done || err != nil {
+			historyIndex = -1
+			historyDraft = nil
+			if done, err := runTTYCommand(text); done || err != nil {
 				return err
 			}
 			commandBuf = commandBuf[:0]
 			continue
 		case ttyEscape:
-			if commandMode {
-				commandMode = false
-				commandBuf = commandBuf[:0]
-				_, _ = fmt.Fprintln(output)
+			escapeKey, err := readTTYEscapeKey(ctx, reader)
+			if err != nil {
+				return err
+			}
+			switch escapeKey {
+			case ttyArrowUp:
+				if !commandMode {
+					if len(commandHistory) == 0 {
+						continue
+					}
+					commandMode = true
+					commandBuf = commandBuf[:0]
+					historyIndex = -1
+					historyDraft = nil
+				}
+				commandBuf, historyIndex, historyDraft = previousTTYHistory(commandBuf, commandHistory, historyIndex, historyDraft)
+				renderTTYCommandLine(output, state, commandBuf)
+				continue
+			case ttyArrowDown:
+				if !commandMode {
+					continue
+				}
+				commandBuf, historyIndex, historyDraft = nextTTYHistory(commandBuf, commandHistory, historyIndex, historyDraft)
+				renderTTYCommandLine(output, state, commandBuf)
+				continue
+			case 0:
+				if commandMode {
+					commandMode = false
+					commandBuf = commandBuf[:0]
+					historyIndex = -1
+					historyDraft = nil
+					_, _ = fmt.Fprintln(output)
+					continue
+				}
+				if hasInspection(state) {
+					clearInspection(state)
+					_, _ = fmt.Fprint(output, formatSnapshotForView(state.currentSnapshot, state, true))
+				}
+				continue
+			default:
 				continue
 			}
-			if hasInspection(state) {
-				clearInspection(state)
-				_, _ = fmt.Fprint(output, formatSnapshotForView(state.currentSnapshot, state, true))
-			}
-			continue
 		case ttyDelete, ttyBackspace:
 			if !commandMode || len(commandBuf) == 0 {
 				continue
 			}
 			commandBuf = commandBuf[:len(commandBuf)-1]
-			_, _ = fmt.Fprint(output, "\b \b")
+			historyIndex = -1
+			historyDraft = nil
+			renderTTYCommandLine(output, state, commandBuf)
 			continue
 		}
 
@@ -215,12 +266,83 @@ func runTTYCommandLoop(ctx context.Context, input *os.File, output io.Writer, ru
 			continue
 		}
 		commandBuf = append(commandBuf, b)
+		historyIndex = -1
+		historyDraft = nil
 		_, _ = fmt.Fprintf(output, "%c", b)
 	}
 }
 
 func ttyCommandText(commandBuf []byte) string {
 	return ":" + strings.TrimSpace(string(commandBuf))
+}
+
+func readTTYEscapeKey(ctx context.Context, reader *asyncByteReader) (byte, error) {
+	seqCtx, cancel := context.WithTimeout(ctx, ttyEscapeReadTimeout)
+	defer cancel()
+
+	prefix, err := reader.Next(seqCtx)
+	if err != nil {
+		if errors.Is(err, context.DeadlineExceeded) {
+			return 0, nil
+		}
+		return 0, err
+	}
+	if prefix != ttyArrowSequenceStart {
+		return 0, nil
+	}
+
+	key, err := reader.Next(seqCtx)
+	if err != nil {
+		if errors.Is(err, context.DeadlineExceeded) {
+			return 0, nil
+		}
+		return 0, err
+	}
+	return key, nil
+}
+
+func appendTTYCommandHistory(history []string, text string) []string {
+	command := strings.TrimSpace(text)
+	if command == "" {
+		return history
+	}
+	history = append(history, command)
+	if len(history) > ttyHistoryLimit {
+		history = append([]string(nil), history[len(history)-ttyHistoryLimit:]...)
+	}
+	return history
+}
+
+func previousTTYHistory(commandBuf []byte, history []string, historyIndex int, historyDraft []byte) ([]byte, int, []byte) {
+	if len(history) == 0 {
+		return commandBuf, historyIndex, historyDraft
+	}
+	if historyIndex < 0 {
+		historyDraft = append(historyDraft[:0], commandBuf...)
+		historyIndex = len(history) - 1
+	} else if historyIndex > 0 {
+		historyIndex--
+	}
+	return []byte(history[historyIndex]), historyIndex, historyDraft
+}
+
+func nextTTYHistory(commandBuf []byte, history []string, historyIndex int, historyDraft []byte) ([]byte, int, []byte) {
+	if len(history) == 0 || historyIndex < 0 {
+		return commandBuf, historyIndex, historyDraft
+	}
+	if historyIndex < len(history)-1 {
+		historyIndex++
+		return []byte(history[historyIndex]), historyIndex, historyDraft
+	}
+	return append([]byte(nil), historyDraft...), -1, nil
+}
+
+func renderTTYCommandLine(output io.Writer, state *viewState, commandBuf []byte) {
+	prefix := ""
+	if state != nil && state.outputTTY {
+		prefix = ">"
+	}
+	_, _ = fmt.Fprintf(output, "\r\x1b[2K%s%s", prefix, string(commandBuf))
 }
 
 func refreshBreakpointState(ctx context.Context, state *viewState, runner commandRunner) error {

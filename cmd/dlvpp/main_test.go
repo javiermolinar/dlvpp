@@ -587,6 +587,56 @@ func TestTTYCommandTextPreservesColonCommandMode(t *testing.T) {
 	}
 }
 
+func TestAppendTTYCommandHistoryPreservesExactCommands(t *testing.T) {
+	t.Parallel()
+
+	history := appendTTYCommandHistory(nil, ":e result")
+	history = appendTTYCommandHistory(history, "  l  ")
+	history = appendTTYCommandHistory(history, "   ")
+	if got := strings.Join(history, ","); got != ":e result,l" {
+		t.Fatalf("unexpected command history: %q", got)
+	}
+}
+
+func TestTTYHistoryNavigationPreservesDraft(t *testing.T) {
+	t.Parallel()
+
+	history := []string{"l", ":e result", ":b 14"}
+	buf, index, draft := previousTTYHistory([]byte(":e acc"), history, -1, nil)
+	if got := string(buf); got != ":b 14" {
+		t.Fatalf("expected latest history entry, got %q", got)
+	}
+	buf, index, draft = previousTTYHistory(buf, history, index, draft)
+	if got := string(buf); got != ":e result" {
+		t.Fatalf("expected previous history entry, got %q", got)
+	}
+	buf, index, draft = nextTTYHistory(buf, history, index, draft)
+	if got := string(buf); got != ":b 14" {
+		t.Fatalf("expected next history entry, got %q", got)
+	}
+	buf, index, draft = nextTTYHistory(buf, history, index, draft)
+	if got := string(buf); got != ":e acc" {
+		t.Fatalf("expected original draft to be restored, got %q", got)
+	}
+	if index != -1 || draft != nil {
+		t.Fatalf("expected history navigation to reset, got index=%d draft=%q", index, string(draft))
+	}
+}
+
+func TestReadTTYEscapeKeyRecognizesArrowKeys(t *testing.T) {
+	t.Parallel()
+
+	reader := newAsyncByteReader(bytes.NewBufferString("[A"))
+	defer reader.Close()
+	key, err := readTTYEscapeKey(context.Background(), reader)
+	if err != nil {
+		t.Fatalf("readTTYEscapeKey returned error: %v", err)
+	}
+	if key != ttyArrowUp {
+		t.Fatalf("expected ttyArrowUp, got %q", key)
+	}
+}
+
 func TestRunCommandLoopCreatesBreakpointFromColonCommand(t *testing.T) {
 	t.Parallel()
 
