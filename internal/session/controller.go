@@ -89,6 +89,10 @@ func (c *Controller) Locals(ctx context.Context, frame backend.FrameRef) ([]back
 	return c.backend.Locals(ctx, frame)
 }
 
+func (c *Controller) Children(ctx context.Context, reference int) ([]backend.Variable, error) {
+	return c.backend.Children(ctx, reference)
+}
+
 func (c *Controller) Output(ctx context.Context) ([]backend.OutputEntry, error) {
 	return c.backend.Output(ctx)
 }

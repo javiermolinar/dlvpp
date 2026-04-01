@@ -12,8 +12,41 @@ import (
 )
 
 func showLocals(ctx context.Context, output io.Writer, runner commandRunner, state *viewState) error {
+	locals, err := fetchLocals(ctx, runner, state)
+	if err != nil {
+		return err
+	}
+	return renderLocals(ctx, output, runner, state, locals)
+}
+
+func expandLocal(ctx context.Context, output io.Writer, runner commandRunner, state *viewState, name string) error {
+	locals, err := fetchLocals(ctx, runner, state)
+	if err != nil {
+		return err
+	}
+
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return errors.New("expand requires a local name")
+	}
+
+	actionCtx, cancel := context.WithTimeout(ctx, commandActionTimeout)
+	defer cancel()
+
+	path, local, err := resolveLocalPath(actionCtx, runner, state, locals, name)
+	if err != nil {
+		return err
+	}
+	if !local.HasChildren || local.Reference <= 0 {
+		return fmt.Errorf("expand: %s has no children", name)
+	}
+	rememberExpandedLocalPath(state, path)
+	return renderLocals(ctx, output, runner, state, locals)
+}
+
+func fetchLocals(ctx context.Context, runner commandRunner, state *viewState) ([]backend.Variable, error) {
 	if state == nil || state.currentSnapshot == nil || state.currentSnapshot.Frame == nil {
-		return errors.New("locals: no current frame")
+		return nil, errors.New("locals: no current frame")
 	}
 
 	actionCtx, cancel := context.WithTimeout(ctx, commandActionTimeout)
@@ -21,12 +54,169 @@ func showLocals(ctx context.Context, output io.Writer, runner commandRunner, sta
 
 	locals, err := runner.Locals(actionCtx, state.currentSnapshot.Frame.Ref)
 	if err != nil {
-		return fmt.Errorf("locals: %w", err)
+		return nil, fmt.Errorf("locals: %w", err)
 	}
-	body := formatLocalsForView(locals, inspectionColorsEnabled(state))
+	return locals, nil
+}
+
+func renderLocals(ctx context.Context, output io.Writer, runner commandRunner, state *viewState, locals []backend.Variable) error {
+	expanded, err := expandedLocals(ctx, runner, state, locals)
+	if err != nil {
+		return err
+	}
+	body := formatLocalsForView(locals, expanded, inspectionColorsEnabled(state))
 	setInspection(state, "locals", body)
 	_, _ = fmt.Fprint(output, formatInspectionForView(state.currentSnapshot, state, "locals", body, true))
 	return nil
+}
+
+func expandedLocals(ctx context.Context, runner commandRunner, state *viewState, locals []backend.Variable) (map[string][]backend.Variable, error) {
+	if state == nil || len(state.expandedLocals) == 0 {
+		return nil, nil
+	}
+
+	actionCtx, cancel := context.WithTimeout(ctx, commandActionTimeout)
+	defer cancel()
+
+	expanded := make(map[string][]backend.Variable, len(state.expandedLocals))
+	visible, _ := filterDisplayedLocals(locals)
+	for _, local := range visible {
+		if err := collectExpandedLocals(actionCtx, runner, state.expandedLocals, expanded, local, local.Name); err != nil {
+			return nil, err
+		}
+	}
+	return expanded, nil
+}
+
+func resolveLocalPath(ctx context.Context, runner commandRunner, state *viewState, locals []backend.Variable, name string) (string, backend.Variable, error) {
+	if strings.Contains(name, ".") {
+		return resolveLocalPathBySegments(ctx, runner, locals, name)
+	}
+
+	expanded, err := expandedLocals(ctx, runner, state, locals)
+	if err != nil {
+		return "", backend.Variable{}, err
+	}
+
+	matches := findVisibleLocalMatches(locals, expanded, name)
+	switch len(matches) {
+	case 0:
+		return "", backend.Variable{}, fmt.Errorf("expand: unknown local %q", name)
+	case 1:
+		return matches[0].Path, matches[0].Variable, nil
+	default:
+		paths := make([]string, 0, len(matches))
+		for _, match := range matches {
+			paths = append(paths, match.Path)
+		}
+		return "", backend.Variable{}, fmt.Errorf("expand: ambiguous local %q (%s)", name, strings.Join(paths, ", "))
+	}
+}
+
+func resolveLocalPathBySegments(ctx context.Context, runner commandRunner, locals []backend.Variable, name string) (string, backend.Variable, error) {
+	parts := strings.Split(name, ".")
+	visible, _ := filterDisplayedLocals(locals)
+	current, ok := findLocalByName(visible, parts[0])
+	if !ok {
+		return "", backend.Variable{}, fmt.Errorf("expand: unknown local %q", name)
+	}
+
+	path := current.Name
+	for _, part := range parts[1:] {
+		if !current.HasChildren || current.Reference <= 0 {
+			return "", backend.Variable{}, fmt.Errorf("expand: unknown local %q", name)
+		}
+		children, err := runner.Children(ctx, current.Reference)
+		if err != nil {
+			return "", backend.Variable{}, fmt.Errorf("locals: expand %s: %w", path, err)
+		}
+		visibleChildren, _ := filterDisplayedLocals(children)
+		next, ok := findLocalByName(visibleChildren, part)
+		if !ok {
+			return "", backend.Variable{}, fmt.Errorf("expand: unknown local %q", name)
+		}
+		path = joinLocalPath(path, next.Name)
+		current = next
+	}
+	return path, current, nil
+}
+
+type localMatch struct {
+	Path     string
+	Variable backend.Variable
+}
+
+func findVisibleLocalMatches(locals []backend.Variable, expanded map[string][]backend.Variable, name string) []localMatch {
+	visible, _ := filterDisplayedLocals(locals)
+	matches := make([]localMatch, 0, 1)
+	for _, local := range visible {
+		collectVisibleLocalMatches(&matches, local, local.Name, expanded, name)
+	}
+	return matches
+}
+
+func collectVisibleLocalMatches(matches *[]localMatch, local backend.Variable, path string, expanded map[string][]backend.Variable, name string) {
+	if local.Name == name {
+		*matches = append(*matches, localMatch{Path: path, Variable: local})
+	}
+	children, ok := expanded[path]
+	if !ok {
+		return
+	}
+	visibleChildren, _ := filterDisplayedLocals(children)
+	for _, child := range visibleChildren {
+		collectVisibleLocalMatches(matches, child, joinLocalPath(path, child.Name), expanded, name)
+	}
+}
+
+func findLocalByName(locals []backend.Variable, name string) (backend.Variable, bool) {
+	for _, local := range locals {
+		if local.Name == name {
+			return local, true
+		}
+	}
+	return backend.Variable{}, false
+}
+
+func collectExpandedLocals(ctx context.Context, runner commandRunner, wanted map[string]struct{}, expanded map[string][]backend.Variable, local backend.Variable, path string) error {
+	if _, ok := wanted[path]; !ok {
+		return nil
+	}
+	if local.Reference <= 0 {
+		return nil
+	}
+	children, err := runner.Children(ctx, local.Reference)
+	if err != nil {
+		return fmt.Errorf("locals: expand %s: %w", path, err)
+	}
+	expanded[path] = children
+	visibleChildren, _ := filterDisplayedLocals(children)
+	for _, child := range visibleChildren {
+		if err := collectExpandedLocals(ctx, runner, wanted, expanded, child, joinLocalPath(path, child.Name)); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func rememberExpandedLocalPath(state *viewState, path string) {
+	if state == nil || path == "" {
+		return
+	}
+	if state.expandedLocals == nil {
+		state.expandedLocals = make(map[string]struct{})
+	}
+	parts := strings.Split(path, ".")
+	for i := 1; i <= len(parts); i++ {
+		state.expandedLocals[strings.Join(parts[:i], ".")] = struct{}{}
+	}
+}
+
+func joinLocalPath(parent string, child string) string {
+	if parent == "" {
+		return child
+	}
+	return parent + "." + child
 }
 
 func showOutput(ctx context.Context, output io.Writer, runner commandRunner, state *viewState) error {
@@ -85,6 +275,7 @@ func formatHelpBody() string {
 		"  o   output",
 		"  b   breakpoints",
 		"  h   help",
+		"  :e result",
 		"",
 		"Breakpoints",
 		"  b   list breakpoints",
@@ -122,11 +313,14 @@ func formatBreakpointsForView(state *viewState) string {
 	return out.String()
 }
 
-func formatLocalsForView(locals []backend.Variable, color bool) string {
-	if !color {
-		return formatLocals(locals)
+func formatLocalsForView(locals []backend.Variable, expanded map[string][]backend.Variable, color bool) string {
+	if len(expanded) == 0 {
+		if !color {
+			return formatLocals(locals)
+		}
+		return formatTTYLocals(locals)
 	}
-	return formatTTYLocals(locals)
+	return formatExpandedLocals(locals, expanded, color)
 }
 
 func formatOutputForView(entries []backend.OutputEntry, color bool) string {

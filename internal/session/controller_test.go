@@ -277,6 +277,10 @@ func (f *fakeBackend) Locals(context.Context, backend.FrameRef) ([]backend.Varia
 	return nil, backend.ErrUnsupported
 }
 
+func (f *fakeBackend) Children(context.Context, int) ([]backend.Variable, error) {
+	return nil, backend.ErrUnsupported
+}
+
 func (f *fakeBackend) Output(context.Context) ([]backend.OutputEntry, error) {
 	return nil, backend.ErrUnsupported
 }

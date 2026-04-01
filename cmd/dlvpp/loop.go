@@ -25,7 +25,7 @@ const (
 	ttyEscape            = 27
 	ttyBackspace         = 8
 	ttyDelete            = 127
-	commandHelpSummary   = "c=continue, n=next, s=step in, l=locals, o=output, b=breakpoints, h=help, :b <location>, q=quit"
+	commandHelpSummary   = "c=continue, n=next, s=step in, l=locals, o=output, b=breakpoints, h=help, :e <local>, :b <location>, q=quit"
 	ansiReset            = "\x1b[0m"
 	ansiDim              = "\x1b[2m"
 	ansiCyan             = "\x1b[36m"
@@ -44,6 +44,7 @@ type commandRunner interface {
 	CreateBreakpoint(ctx context.Context, spec backend.BreakpointSpec) (*backend.Breakpoint, error)
 	Breakpoints(ctx context.Context) ([]backend.Breakpoint, error)
 	Locals(ctx context.Context, frame backend.FrameRef) ([]backend.Variable, error)
+	Children(ctx context.Context, reference int) ([]backend.Variable, error)
 	Output(ctx context.Context) ([]backend.OutputEntry, error)
 }
 
@@ -319,6 +320,14 @@ func executeCommandText(ctx context.Context, text string, output io.Writer, runn
 		return runDebuggerAction(ctx, output, runner, state, session.ActionNext, "next")
 	case "s":
 		return runDebuggerAction(ctx, output, runner, state, session.ActionStepIn, "step in")
+	case "e":
+		if !colonCommand {
+			return fmt.Errorf("unknown command: %s", command)
+		}
+		if len(args) == 0 {
+			return errors.New("expand requires a local name")
+		}
+		return expandLocal(ctx, output, runner, state, strings.Join(args, " "))
 	case "l":
 		return showLocals(ctx, output, runner, state)
 	case "o":
@@ -400,6 +409,65 @@ func formatTTYLocals(locals []backend.Variable) string {
 	}
 	out.WriteString(formatHiddenLocalsSummary(hiddenCount, true))
 	return out.String()
+}
+
+func formatExpandedLocals(locals []backend.Variable, expanded map[string][]backend.Variable, color bool) string {
+	visible, hiddenCount := filterDisplayedLocals(locals)
+	if len(visible) == 0 {
+		if hiddenCount == 0 {
+			if color {
+				return ansiDim + "(no locals)" + ansiReset + "\n"
+			}
+			return "(no locals)\n"
+		}
+		if color {
+			return ansiDim + "(no user locals)" + ansiReset + "\n" + formatHiddenLocalsSummary(hiddenCount, true)
+		}
+		return "(no user locals)\n" + formatHiddenLocalsSummary(hiddenCount, false)
+	}
+
+	var out strings.Builder
+	for _, local := range visible {
+		writeExpandedLocalLines(&out, local, local.Name, expanded, color, "")
+	}
+	out.WriteString(formatHiddenLocalsSummary(hiddenCount, color))
+	return out.String()
+}
+
+func writeExpandedLocalLines(out *strings.Builder, local backend.Variable, path string, expanded map[string][]backend.Variable, color bool, indent string) {
+	writeLocalLine(out, local, color, indent)
+	children, ok := expanded[path]
+	if !ok {
+		return
+	}
+	visibleChildren, hiddenChildren := filterDisplayedLocals(children)
+	childIndent := indent + "  "
+	for _, child := range visibleChildren {
+		writeExpandedLocalLines(out, child, joinLocalPath(path, child.Name), expanded, color, childIndent)
+	}
+	out.WriteString(formatHiddenLocalsSummaryWithIndent(hiddenChildren, color, childIndent))
+}
+
+func writeLocalLine(out *strings.Builder, local backend.Variable, color bool, indent string) {
+	value := formatLocalDisplayValue(local)
+	if !color {
+		switch {
+		case local.Type != "":
+			fmt.Fprintf(out, "%s%s (%s) = %s\n", indent, local.Name, local.Type, value)
+		default:
+			fmt.Fprintf(out, "%s%s = %s\n", indent, local.Name, value)
+		}
+		return
+	}
+
+	coloredName := indent + ansiCyan + local.Name + ansiReset
+	coloredValue := colorizeLocalValue(value)
+	switch {
+	case local.Type != "":
+		fmt.Fprintf(out, "%s %s(%s)%s = %s\n", coloredName, ansiDim, local.Type, ansiReset, coloredValue)
+	default:
+		fmt.Fprintf(out, "%s = %s\n", coloredName, coloredValue)
+	}
 }
 
 func filterDisplayedLocals(locals []backend.Variable) ([]backend.Variable, int) {
@@ -499,6 +567,10 @@ func splitSummaryField(value string) (string, string) {
 }
 
 func formatHiddenLocalsSummary(hiddenCount int, color bool) string {
+	return formatHiddenLocalsSummaryWithIndent(hiddenCount, color, "")
+}
+
+func formatHiddenLocalsSummaryWithIndent(hiddenCount int, color bool, indent string) string {
 	if hiddenCount == 0 {
 		return ""
 	}
@@ -509,9 +581,9 @@ func formatHiddenLocalsSummary(hiddenCount int, color bool) string {
 	}
 	text := fmt.Sprintf("(%d synthetic %s hidden)", hiddenCount, noun)
 	if !color {
-		return text + "\n"
+		return indent + text + "\n"
 	}
-	return ansiDim + text + ansiReset + "\n"
+	return indent + ansiDim + text + ansiReset + "\n"
 }
 
 func formatOutput(entries []backend.OutputEntry) string {

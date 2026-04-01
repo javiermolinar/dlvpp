@@ -315,27 +315,27 @@ func (c *Client) Locals(ctx context.Context, frame backend.FrameRef) ([]backend.
 
 	var locals []backend.Variable
 	for _, scope := range selected {
-		resp, err := c.requestLocked(ctx, "variables", map[string]any{"variablesReference": scope.VariablesReference})
+		variables, err := c.variablesFromReferenceLocked(ctx, scope.VariablesReference)
 		if err != nil {
 			return nil, err
 		}
-
-		var body variablesBody
-		if err := json.Unmarshal(resp.Body, &body); err != nil {
-			return nil, fmt.Errorf("decode variables response: %w", err)
-		}
-
-		for _, variable := range body.Variables {
-			locals = append(locals, backend.Variable{
-				Name:        variable.Name,
-				Type:        variable.Type,
-				Value:       variable.Value,
-				HasChildren: variable.VariablesReference > 0,
-			})
-		}
+		locals = append(locals, variables...)
 	}
 
 	return locals, nil
+}
+
+func (c *Client) Children(ctx context.Context, reference int) ([]backend.Variable, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if c.conn == nil {
+		return nil, errors.New("dap client is not connected")
+	}
+	if reference <= 0 {
+		return nil, errors.New("variables reference is required")
+	}
+	return c.variablesFromReferenceLocked(ctx, reference)
 }
 
 func (c *Client) Output(ctx context.Context) ([]backend.OutputEntry, error) {
@@ -355,6 +355,30 @@ func (c *Client) Output(ctx context.Context) ([]backend.OutputEntry, error) {
 
 func (c *Client) Goroutines(ctx context.Context) ([]backend.Goroutine, error) {
 	return nil, backend.ErrUnsupported
+}
+
+func (c *Client) variablesFromReferenceLocked(ctx context.Context, reference int) ([]backend.Variable, error) {
+	resp, err := c.requestLocked(ctx, "variables", map[string]any{"variablesReference": reference})
+	if err != nil {
+		return nil, err
+	}
+
+	var body variablesBody
+	if err := json.Unmarshal(resp.Body, &body); err != nil {
+		return nil, fmt.Errorf("decode variables response: %w", err)
+	}
+
+	variables := make([]backend.Variable, 0, len(body.Variables))
+	for _, variable := range body.Variables {
+		variables = append(variables, backend.Variable{
+			Name:        variable.Name,
+			Type:        variable.Type,
+			Value:       variable.Value,
+			HasChildren: variable.VariablesReference > 0,
+			Reference:   variable.VariablesReference,
+		})
+	}
+	return variables, nil
 }
 
 func selectLocalScopes(scopes []scope) []scope {

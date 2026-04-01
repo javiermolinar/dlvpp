@@ -333,6 +333,112 @@ func TestRunCommandLoopShowsLocals(t *testing.T) {
 	}
 }
 
+func TestRunCommandLoopExpandsLocalInline(t *testing.T) {
+	t.Parallel()
+
+	runner := &fakeCommandRunner{
+		locals: []backend.Variable{{Name: "result", Type: "main.searchResult", Value: "main.searchResult {Invoice: *main.invoice {...}}", HasChildren: true, Reference: 7}},
+		children: map[int][]backend.Variable{
+			7: {
+				{Name: "Invoice", Type: "*main.invoice", Value: "*main.invoice {Number: \"INV-1\"}", HasChildren: true, Reference: 9},
+				{Name: "Matches", Type: "[]string", Value: "[]string len: 3, cap: 3, [\"acme\",\"latam\"]", HasChildren: true, Reference: 10},
+				{Name: "Retryable", Type: "bool", Value: "false"},
+				{Name: "~r0", Type: "int", Value: "0"},
+			},
+		},
+		snapshots: []*session.Snapshot{{
+			State: backend.StopState{},
+			Frame: &backend.Frame{Ref: backend.FrameRef{GoroutineID: 1, Index: 2}, Location: backend.SourceLocation{File: "main.go", Line: 12, Function: "main.main"}},
+		}},
+	}
+	var output bytes.Buffer
+	if err := runCommandLoop(context.Background(), bytes.NewBufferString(":e result\nq\n"), &output, runner, runner.currentSnapshot(), false); err != nil {
+		t.Fatalf("runCommandLoop returned error: %v", err)
+	}
+	text := output.String()
+	for _, want := range []string{
+		"locals main.main main.go:12",
+		"result (main.searchResult) = {…}",
+		"  Invoice (*main.invoice) = {…}",
+		"  Matches ([]string) = len: 3, cap: 3",
+		"  Retryable (bool) = false",
+		"  (1 synthetic local hidden)",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("expected expanded locals output to contain %q, got %q", want, text)
+		}
+	}
+}
+
+func TestRunCommandLoopExpandsNestedLocalByPath(t *testing.T) {
+	t.Parallel()
+
+	runner := &fakeCommandRunner{
+		locals: []backend.Variable{{Name: "acct", Type: "main.customer", Value: "main.customer {Address: main.address {...}}", HasChildren: true, Reference: 3}},
+		children: map[int][]backend.Variable{
+			3: {
+				{Name: "Address", Type: "main.address", Value: "main.address {City: \"Barcelona\", Country: \"ES\"}", HasChildren: true, Reference: 4},
+			},
+			4: {
+				{Name: "City", Type: "string", Value: "\"Barcelona\""},
+				{Name: "Country", Type: "string", Value: "\"ES\""},
+			},
+		},
+		snapshots: []*session.Snapshot{{
+			State: backend.StopState{},
+			Frame: &backend.Frame{Ref: backend.FrameRef{GoroutineID: 1, Index: 2}, Location: backend.SourceLocation{File: "main.go", Line: 12, Function: "main.main"}},
+		}},
+	}
+	var output bytes.Buffer
+	if err := runCommandLoop(context.Background(), bytes.NewBufferString(":e acct.Address\nq\n"), &output, runner, runner.currentSnapshot(), false); err != nil {
+		t.Fatalf("runCommandLoop returned error: %v", err)
+	}
+	text := output.String()
+	for _, want := range []string{
+		"acct (main.customer) = {…}",
+		"  Address (main.address) = {…}",
+		"    City (string) = \"Barcelona\"",
+		"    Country (string) = \"ES\"",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("expected nested expanded locals output to contain %q, got %q", want, text)
+		}
+	}
+}
+
+func TestRunCommandLoopExpandsVisibleNestedLocalByName(t *testing.T) {
+	t.Parallel()
+
+	runner := &fakeCommandRunner{
+		locals: []backend.Variable{{Name: "acct", Type: "main.customer", Value: "main.customer {Address: main.address {...}}", HasChildren: true, Reference: 3}},
+		children: map[int][]backend.Variable{
+			3: {
+				{Name: "Address", Type: "main.address", Value: "main.address {City: \"Barcelona\", Country: \"ES\"}", HasChildren: true, Reference: 4},
+			},
+			4: {
+				{Name: "City", Type: "string", Value: "\"Barcelona\""},
+			},
+		},
+		snapshots: []*session.Snapshot{{
+			State: backend.StopState{},
+			Frame: &backend.Frame{Ref: backend.FrameRef{GoroutineID: 1, Index: 2}, Location: backend.SourceLocation{File: "main.go", Line: 12, Function: "main.main"}},
+		}},
+	}
+	var output bytes.Buffer
+	if err := runCommandLoop(context.Background(), bytes.NewBufferString(":e acct\n:e Address\nq\n"), &output, runner, runner.currentSnapshot(), false); err != nil {
+		t.Fatalf("runCommandLoop returned error: %v", err)
+	}
+	text := output.String()
+	for _, want := range []string{
+		"  Address (main.address) = {…}",
+		"    City (string) = \"Barcelona\"",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("expected visible child expansion to contain %q, got %q", want, text)
+		}
+	}
+}
+
 func TestRunCommandLoopShowsOutputInspection(t *testing.T) {
 	t.Parallel()
 
@@ -826,7 +932,7 @@ func TestFormatInspectionForViewPlainUsesCompactHeader(t *testing.T) {
 func TestRunDebuggerActionClearsInspection(t *testing.T) {
 	t.Parallel()
 
-	state := &viewState{inspectionTitle: "locals", inspectionBody: "total (int) = 42\n"}
+	state := &viewState{inspectionTitle: "locals", inspectionBody: "total (int) = 42\n", expandedLocals: map[string]struct{}{"result": {}}}
 	runner := &fakeCommandRunner{snapshots: []*session.Snapshot{{State: backend.StopState{}}}}
 	var output bytes.Buffer
 	if err := runDebuggerAction(context.Background(), &output, runner, state, session.ActionNext, "next"); err != nil {
@@ -834,6 +940,9 @@ func TestRunDebuggerActionClearsInspection(t *testing.T) {
 	}
 	if hasInspection(state) {
 		t.Fatalf("expected inspection to be cleared, got %#v", state)
+	}
+	if len(state.expandedLocals) != 0 {
+		t.Fatalf("expected expanded locals to be cleared, got %#v", state.expandedLocals)
 	}
 }
 
@@ -1014,6 +1123,7 @@ type fakeCommandRunner struct {
 	snapshotIndex   int
 	breakpoint      *backend.Breakpoint
 	locals          []backend.Variable
+	children        map[int][]backend.Variable
 	output          []backend.OutputEntry
 	err             error
 }
@@ -1081,6 +1191,16 @@ func (f *fakeCommandRunner) Locals(_ context.Context, _ backend.FrameRef) ([]bac
 		return nil, f.err
 	}
 	return f.locals, nil
+}
+
+func (f *fakeCommandRunner) Children(_ context.Context, reference int) ([]backend.Variable, error) {
+	if f.err != nil {
+		return nil, f.err
+	}
+	if f.children == nil {
+		return nil, nil
+	}
+	return f.children[reference], nil
 }
 
 func (f *fakeCommandRunner) Output(_ context.Context) ([]backend.OutputEntry, error) {

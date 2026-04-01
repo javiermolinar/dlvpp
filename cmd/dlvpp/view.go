@@ -30,6 +30,7 @@ type viewState struct {
 	breakpoints     []breakpointRecord
 	inspectionTitle string
 	inspectionBody  string
+	expandedLocals  map[string]struct{}
 }
 
 func newViewState(sticky bool, output io.Writer, initialSnapshot *session.Snapshot, initialBreakpoints []breakpointRecord) *viewState {
@@ -168,6 +169,9 @@ func setInspection(state *viewState, title string, body string) {
 	if state == nil {
 		return
 	}
+	if title != "locals" {
+		state.expandedLocals = nil
+	}
 	state.inspectionTitle = title
 	state.inspectionBody = body
 }
@@ -178,6 +182,7 @@ func clearInspection(state *viewState) {
 	}
 	state.inspectionTitle = ""
 	state.inspectionBody = ""
+	state.expandedLocals = nil
 }
 
 func hasInspection(state *viewState) bool {
